@@ -58,7 +58,14 @@ class Anchors(nn.Module):
             all_anchors     = np.append(all_anchors, shifted_anchors, axis=0)
 
         all_anchors = torch.from_numpy(all_anchors).to(dtype=torch.float)
-
+        
+        # Print debug info about anchors
+        print(f"Generated {all_anchors.size(0)} anchors from pyramid levels {self.pyramid_levels}")
+        print(f"Pyramid levels: {self.pyramid_levels}")
+        print(f"Strides: {self.strides}")
+        print(f"Sizes: {self.sizes}")
+        print(f"Feature shapes: {self.feat_shape}")
+        
         return all_anchors
 
 def generate_anchors(num_anchors=None, base_size=8, ratios=None, scales=None):

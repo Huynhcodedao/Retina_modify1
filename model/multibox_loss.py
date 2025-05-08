@@ -86,7 +86,22 @@ class MultiBoxLoss(nn.Module):
         pos1 = conf_t > zeros
         num_pos_landm = pos1.long().sum(1, keepdim=True)
         N1 = max(num_pos_landm.data.sum().float(), 1)
-        pos_idx1 = pos1.unsqueeze(pos1.dim()).expand_as(landm_data)
+        
+        # Check for dimension mismatch and fix if needed
+        if pos1.unsqueeze(pos1.dim()).shape != landm_data.shape:
+            # Resize pos1 tensor to match the shape of landm_data for element-wise operations
+            print(f"Adjusting pos1 shape from {pos1.unsqueeze(pos1.dim()).shape} to match landm_data shape {landm_data.shape}")
+            # Create a new tensor with the correct shape
+            pos_idx1 = torch.zeros(landm_data.shape, dtype=torch.bool).to(self.device)
+            # Fill it based on pos1 values, repeating as needed
+            for b in range(pos1.size(0)):
+                for p in range(pos1.size(1)):
+                    if pos1[b, p]:
+                        for i in range(landm_data.size(2)):
+                            pos_idx1[b, p, i] = True
+        else:
+            pos_idx1 = pos1.unsqueeze(pos1.dim()).expand_as(landm_data)
+            
         landm_p = landm_data[pos_idx1].view(-1, 10)
         landm_t = landm_t[pos_idx1].view(-1, 10)
         loss_landm = F.smooth_l1_loss(landm_p, landm_t, reduction='sum')

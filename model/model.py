@@ -170,6 +170,9 @@ class RetinaFace(nn.Module):
             # Các kênh đầu vào khác nhau cho mô hình latent
             # ResNet50 output channels: layer2=512, layer3=1024, layer4=2048
             in_channels_list = [512, 512, 1024, 2048]
+            
+            # IMPORTANT: Update feature_map for latent mode to ensure anchor generation matches output dimensions
+            self.feature_map = [3, 4, 5, 6, 7]  # Use the same pyramid levels for anchor generation
         else:
             # Original implementation for RGB image input
             self.body = IntermediateLayerGetter(backbone, return_feature)
@@ -184,9 +187,15 @@ class RetinaFace(nn.Module):
         self.ssh = SSH(in_channels=OUT_CHANNELS, out_channels=OUT_CHANNELS)
 
         # class head + bbox head + landmark head
-        self.ClassHead      = self._make_class_head(inchannels=OUT_CHANNELS, anchor_num=6, fpn_num=num_fpn)
-        self.BboxHead       = self._make_bbox_head(inchannels=OUT_CHANNELS, anchor_num=6, fpn_num=num_fpn)
-        self.LandmarkHead   = self._make_landmark_head(inchannels=OUT_CHANNELS, anchor_num=6, fpn_num=num_fpn)
+        if use_latent:
+            # For latent mode, we'll have 6 FPN outputs
+            fpn_num = 6
+        else:
+            fpn_num = len(self.feature_map)
+            
+        self.ClassHead      = self._make_class_head(inchannels=OUT_CHANNELS, anchor_num=6, fpn_num=fpn_num)
+        self.BboxHead       = self._make_bbox_head(inchannels=OUT_CHANNELS, anchor_num=6, fpn_num=fpn_num)
+        self.LandmarkHead   = self._make_landmark_head(inchannels=OUT_CHANNELS, anchor_num=6, fpn_num=fpn_num)
 
     def _make_class_head(self,fpn_num=3,inchannels=64,anchor_num=2):
         classhead = nn.ModuleList()
@@ -256,7 +265,13 @@ class RetinaFace(nn.Module):
         feature_3 = self.ssh(fpn[2])
         feature_4 = self.ssh(fpn[3])
         feature_5 = self.ssh(fpn[4])
-        features = [feature_1, feature_2, feature_3, feature_4, feature_5]
+        
+        # Process the 6th feature level if it exists
+        if len(fpn) > 5:
+            feature_6 = self.ssh(fpn[5])
+            features = [feature_1, feature_2, feature_3, feature_4, feature_5, feature_6]
+        else:
+            features = [feature_1, feature_2, feature_3, feature_4, feature_5]
 
         bbox_regressions = torch.cat([self.BboxHead[i](feature) for i, feature in enumerate(features)], dim=1)
         classifications  = torch.cat([self.ClassHead[i](feature) for i, feature in enumerate(features)], dim=1)

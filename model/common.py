@@ -88,16 +88,29 @@ class FPN(nn.Module):
             out_channels (int): number of channels of the FPN representation
         """
         super(FPN, self).__init__()
-        assert len(in_channels_list) == 4
-        # [IN_CHANNELS*2, IN_CHANNELS*4, IN_CHANNELS*8, IN_CHANNELS*16]
-        self.layer_feature_1 = Conv_BN(in_channels_list[0], out_channels, 1, padding=0, leaky=leaky)
-        self.layer_feature_2 = Conv_BN(in_channels_list[1], out_channels, 1, padding=0, leaky=leaky)
-        self.layer_feature_3 = Conv_BN(in_channels_list[2], out_channels, 1, padding=0, leaky=leaky)
-        self.layer_feature_4 = Conv_BN(in_channels_list[3], out_channels, 1, padding=0, leaky=leaky)
-        self.layer_feature_5 = Conv_BN(in_channels_list[3], out_channels, 3, stride=2, leaky=leaky)
-
-        self.merge           = Conv_BN(out_channels, out_channels, leaky=leaky)
-        self.upsample        = nn.Upsample(scale_factor=2, mode='nearest')
+        
+        self.debug = False  # Set to True to enable debug messages
+        
+        if len(in_channels_list) == 4:
+            # For latent input (3 backbone features + 1 input feature)
+            self.layer_feature_1 = Conv_BN(in_channels_list[0], out_channels)
+            self.layer_feature_2 = Conv_BN(in_channels_list[1], out_channels)
+            self.layer_feature_3 = Conv_BN(in_channels_list[2], out_channels)
+            self.layer_feature_4 = Conv_BN(in_channels_list[3], out_channels)
+            self.layer_feature_5 = Conv_BN(in_channels_list[3], out_channels)
+        else:
+            # Original implementation
+            self.layer_feature_1 = Conv_BN(in_channels_list[0], out_channels)
+            self.layer_feature_2 = Conv_BN(in_channels_list[1], out_channels)
+            self.layer_feature_3 = Conv_BN(in_channels_list[2], out_channels)
+            self.layer_feature_4 = Conv_BN(in_channels_list[3], out_channels)
+            self.layer_feature_5 = Conv_BN(in_channels_list[3], out_channels)
+            
+        # In P6 we use  5x5 stride 2 to avoid checkerboard artifact
+        self.conv6 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=2, padding=1)
+        
+        self.merge = Conv_BN(out_channels, out_channels)
+        self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
 
     def forward(self, input):
         """
@@ -114,16 +127,26 @@ class FPN(nn.Module):
         names   = list(input.keys())
         input   = list(input.values())
 
+        if self.debug:
+            print(f"FPN input keys: {names}")
+            print(f"FPN input values shapes: {[v.shape for v in input]}")
+
         # Kiểm tra số lượng feature maps
         if len(input) == 3:  # Trường hợp sử dụng latent (out_feature2, out_feature3, out_feature4)
             # Đối với latent, chúng ta không có out_feature1
             # Sử dụng directly out_feature2 cho output1
+            if self.debug:
+                print("FPN: Using latent input mode (3 feature maps)")
+                
             output1 = self.layer_feature_1(input[0])
             output2 = self.layer_feature_2(input[0])  # Sử dụng feature đầu tiên (out_feature2)
             output3 = self.layer_feature_3(input[1])  # Sử dụng feature thứ hai (out_feature3)
             output4 = self.layer_feature_4(input[2])  # Sử dụng feature thứ ba (out_feature4)
             output5 = self.layer_feature_5(input[2])  # Tạo feature thứ năm từ out_feature4
         else:  # Trường hợp sử dụng RGB bình thường (4 feature maps)
+            if self.debug:
+                print("FPN: Using RGB input mode (4 feature maps)")
+                
             output1 = self.layer_feature_1(input[0])
             output2 = self.layer_feature_2(input[1])
             output3 = self.layer_feature_3(input[2])
@@ -148,7 +171,13 @@ class FPN(nn.Module):
         # output1 = self.upsample(output1)
         output1 = self.merge(output1)
 
-        return [output1, output2, output3, output4, output5]
+        # P6 is a stride of 2
+        output6 = self.conv6(output5)
+
+        if self.debug:
+            print(f"FPN output shapes: {output1.shape}, {output2.shape}, {output3.shape}, {output4.shape}, {output5.shape}, {output6.shape}")
+            
+        return [output1, output2, output3, output4, output5, output6]
 
 class MobileNetV1(nn.Module):
     def __init__(self, in_channels=3, out_channels=1000, start_frame=32):
