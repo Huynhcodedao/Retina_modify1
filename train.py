@@ -39,6 +39,7 @@ def parse_args():
     parser.add_argument('--label_file', type=str, default='labels.txt', help="file containing annotations")
     parser.add_argument('--latent_suffix', type=str, default='latent_75.npy', help="specific latent file to use")
     parser.add_argument('--debug', action='store_true', help="enable debug mode with shapes printed")
+    parser.add_argument('--data_path', type=str, default=DATA_PATH, help="path to dataset directory")
 
     args = parser.parse_args()
     return args
@@ -119,6 +120,42 @@ def evaluate(model, anchors, validloader, loss_function, best_box, device='cpu')
 if __name__ == '__main__':
     args = parse_args()
 
+    # Kiểm tra thư mục hiện tại và cấu trúc thư mục
+    print("\nĐang kiểm tra cấu trúc thư mục:")
+    import os
+    
+    print(f"Thư mục hiện tại: {os.getcwd()}")
+    print("Danh sách thư mục và file trong thư mục hiện tại:")
+    for f in os.listdir():
+        if os.path.isdir(f):
+            print(f"  [Thư mục] {f}")
+        else:
+            print(f"  [File] {f}")
+    
+    if os.path.exists("data"):
+        print("\nNội dung trong thư mục data:")
+        for f in os.listdir("data"):
+            print(f"  {f}")
+            data_path = os.path.join("data", f)
+            if os.path.isdir(data_path):
+                print(f"    Nội dung trong {data_path}:")
+                try:
+                    for subf in os.listdir(data_path):
+                        print(f"      {subf}")
+                except Exception as e:
+                    print(f"      Lỗi: {e}")
+    else:
+        print("\nKhông tìm thấy thư mục data trong thư mục hiện tại!")
+        print("Đang tìm kiếm thư mục có thể chứa dữ liệu...")
+        
+        # Các tên thư mục thường dùng để lưu dữ liệu
+        possible_data_dirs = ["data", "dataset", "datasets", "DATA", "DATASET", "train", "test"]
+        for dir_name in possible_data_dirs:
+            if os.path.exists(dir_name):
+                print(f"Tìm thấy thư mục {dir_name}:")
+                for f in os.listdir(dir_name):
+                    print(f"  {f}")
+    
     # init wandb
     config = dict(
         epoch           = args.epoch,
@@ -151,14 +188,14 @@ if __name__ == '__main__':
         # Use the latent representation dataset
         print(f"\tUsing latent representations with suffix: {args.latent_suffix}")
         train_set = LatentWiderFaceDataset(
-            root_path=DATA_PATH, 
+            root_path=args.data_path, 
             latent_dir=args.latent_dir, 
             label_file=args.label_file,
             latent_suffix=args.latent_suffix,
             is_train=True
         )
         valid_set = LatentWiderFaceDataset(
-            root_path=DATA_PATH, 
+            root_path=args.data_path, 
             latent_dir=args.latent_dir, 
             label_file=args.label_file,
             latent_suffix=args.latent_suffix,
