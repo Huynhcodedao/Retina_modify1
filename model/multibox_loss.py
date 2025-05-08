@@ -44,8 +44,8 @@ class MultiBoxLoss(nn.Module):
         self.variance       = [0.1, 0.2]
         self.device         = device
         
-        # DEBUG: Giảm ngưỡng overlap để dễ có positive matches hơn
-        self.threshold = max(0.1, self.threshold * 0.7)
+        # Reduce overlap threshold to 0.2 for better matching with small faces
+        self.threshold = max(0.1, self.threshold * 0.5)
         print(f"DEBUG: Đã giảm ngưỡng overlap xuống {self.threshold}")
 
     def forward(self, predictions, priors, targets):
@@ -418,8 +418,17 @@ class MultiBoxLoss(nn.Module):
         # Tìm best default box cho mỗi ground truth box
         best_default_overlap, best_default_idx = overlaps.max(1)
         
+        # Sử dụng ngưỡng thấp hơn khi debug để bắt được nhiều matches hơn
+        dynamic_threshold = self.threshold
+        
+        # Thử giảm ngưỡng nếu có ít matches
+        if best_default_overlap.max() < dynamic_threshold:
+            dynamic_threshold = max(0.1, best_default_overlap.max() * 0.8)
+            if debug:
+                print(f"  Giảm ngưỡng tạm thời xuống {dynamic_threshold:.4f} để tìm matches tốt hơn")
+        
         # Nếu độ trùng khớp > ngưỡng, coi như matched
-        match_mask = best_default_overlap > self.threshold
+        match_mask = best_default_overlap > dynamic_threshold
         num_matches = match_mask.sum().item()
         
         if debug:
@@ -430,7 +439,7 @@ class MultiBoxLoss(nn.Module):
             if num_matches == 0:
                 print("  Không có matches nào vượt ngưỡng!")
                 max_iou = best_default_overlap.max().item()
-                print(f"  IoU cao nhất: {max_iou:.4f} (ngưỡng: {self.threshold})")
+                print(f"  IoU cao nhất: {max_iou:.4f} (ngưỡng: {dynamic_threshold})")
                 
                 # Tìm matches tốt nhất ngay cả khi không vượt ngưỡng
                 top5_ious, top5_idx = best_default_overlap.topk(min(5, len(best_default_overlap)))
@@ -441,5 +450,40 @@ class MultiBoxLoss(nn.Module):
                     gt_height = gt_box[3] - gt_box[1]
                     gt_area = gt_width * gt_height
                     print(f"    GT {idx}: kích thước={gt_width:.4f}×{gt_height:.4f}, area={gt_area:.6f}, IoU={iou:.4f}")
+                    
+                # Phân tích lý do tại sao IoU thấp
+                anchor_widths = defaults[:, 2] - defaults[:, 0]
+                anchor_heights = defaults[:, 3] - defaults[:, 1]
+                anchor_areas = anchor_widths * anchor_heights
+                
+                # Tìm tỷ lệ kích thước giữa anchors và faces
+                for i, idx in enumerate(top5_idx):
+                    gt_box = truths[idx]
+                    gt_width = gt_box[2] - gt_box[0]
+                    gt_height = gt_box[3] - gt_box[1]
+                    gt_area = gt_width * gt_height
+                    
+                    # Tìm anchor kích thước phù hợp nhất
+                    width_ratios = anchor_widths / gt_width
+                    height_ratios = anchor_heights / gt_height
+                    area_ratios = anchor_areas / gt_area
+                    
+                    # Tìm anchors có tỷ lệ gần 1:1
+                    good_anchors = ((width_ratios > 0.5) & (width_ratios < 2.0) & 
+                                  (height_ratios > 0.5) & (height_ratios < 2.0))
+                    
+                    num_good_anchors = good_anchors.sum().item()
+                    if num_good_anchors > 0:
+                        print(f"    GT {idx} có {num_good_anchors} anchors với tỷ lệ kích thước phù hợp")
+                    else:
+                        print(f"    GT {idx} không có anchor nào phù hợp về kích thước!")
+                        # Tìm min/max tỷ lệ để phân tích lý do
+                        min_width_ratio = width_ratios.min().item()
+                        max_width_ratio = width_ratios.max().item()
+                        min_height_ratio = height_ratios.min().item()
+                        max_height_ratio = height_ratios.max().item()
+                        
+                        print(f"      Tỷ lệ width: min={min_width_ratio:.2f}, max={max_width_ratio:.2f}")
+                        print(f"      Tỷ lệ height: min={min_height_ratio:.2f}, max={max_height_ratio:.2f}")
         
         return num_matches

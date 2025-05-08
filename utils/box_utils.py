@@ -81,15 +81,23 @@ def match(threshold, truths, priors, variances, labels, landms, loc_t, conf_t, l
     # [1,num_objects] best prior for each ground truth
     best_prior_overlap, best_prior_idx = overlaps.max(1, keepdim=True)
 
-    # ignore hard gt
-    valid_gt_idx = best_prior_overlap[:, 0] >= 0.2
+    # Lower threshold for valid GT to 0.15 (was 0.2) since faces are small
+    valid_gt_idx = best_prior_overlap[:, 0] >= 0.15
     best_prior_idx_filter = best_prior_idx[valid_gt_idx, :]
 
     if best_prior_idx_filter.shape[0] <= 0:
-        loc_t[idx] = 0
-        conf_t[idx] = 0
-
-        return loc_t, conf_t, landm_t
+        # If still no matches, print debug info
+        print(f"WARNING: No valid matches found. Best IoU: {best_prior_overlap.max().item():.4f}")
+        
+        # Force at least one match by using best available match
+        if best_prior_overlap.size(0) > 0:
+            best_idx = best_prior_overlap.argmax().item()
+            best_prior_idx_filter = best_prior_idx[best_idx:best_idx+1]
+            print(f"Forcing match with best overlap: {best_prior_overlap[best_idx].item():.4f}")
+        else:
+            loc_t[idx] = 0
+            conf_t[idx] = 0
+            return loc_t, conf_t, landm_t
 
     # [1,num_priors] best ground truth for each prior
     best_truth_overlap, best_truth_idx = overlaps.max(0, keepdim=True)
@@ -105,7 +113,9 @@ def match(threshold, truths, priors, variances, labels, landms, loc_t, conf_t, l
         best_truth_idx[best_prior_idx[j]] = j
     matches = truths[best_truth_idx]            # Shape: [num_priors,4] 此处为每一个anchor对应的bbox取出来
     conf = labels[best_truth_idx]               # Shape: [num_priors]      此处为每一个anchor对应的label取出来
-    conf[best_truth_overlap < threshold] = 0    # label as background   overlap<0.35的全部作为负样本
+    
+    # Lower the threshold for background to 0.25 (was 0.35)
+    conf[best_truth_overlap < threshold] = 0    # label as background
     loc = encode(matches, priors, variances)
 
     matches_landm = landms[best_truth_idx]

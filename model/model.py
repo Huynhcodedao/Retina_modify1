@@ -16,8 +16,15 @@ class BridgeModule(nn.Module):
         """
         super(BridgeModule, self).__init__()
         
+        # Improved architecture with more flexible input handling
+        self.debug = False
+        
+        # Initial normalization and adaptation layers
+        self.input_norm = nn.BatchNorm2d(in_channels)
+        self.input_adapt = nn.Conv2d(in_channels, 256, kernel_size=1)
+        
         # Upsampling pathway using transposed convolutions
-        self.conv1 = nn.Conv2d(in_channels, 512, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(256, 512, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(512)
         self.relu1 = nn.ReLU(inplace=True)
         
@@ -29,20 +36,27 @@ class BridgeModule(nn.Module):
         self.bn3 = nn.BatchNorm2d(out_channels)
         self.relu3 = nn.ReLU(inplace=True)
         
+        # Add residual connection
+        self.residual_conv = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=4, stride=4, padding=0)
+        
     def forward(self, x):
         # Debug input shape
-        if hasattr(self, 'debug') and self.debug:
+        if self.debug:
             print(f"Bridge input shape: {x.shape}")
         
-        # Ensure input has the correct number of channels
+        # Handle different input dimensions
         if x.dim() == 3:  # If missing batch dimension
             x = x.unsqueeze(0)
-            print(f"Added missing batch dimension: {x.shape}")
+            if self.debug:
+                print(f"Added missing batch dimension: {x.shape}")
         
+        # Handle different channel counts flexibly
         if x.size(1) != 256:
-            print(f"ERROR: Expected 256 channels in input, got {x.size(1)}. Reshaping...")
+            if self.debug:
+                print(f"Input has {x.size(1)} channels instead of 256. Adapting...")
+            
             if x.size(1) < 256:
-                # Duplicate channels to get 256
+                # Duplicate channels to get closer to 256
                 repeat_factor = int(np.ceil(256 / x.size(1)))
                 x_expanded = x.repeat(1, repeat_factor, 1, 1)
                 x = x_expanded[:, :256, :, :]
@@ -50,6 +64,14 @@ class BridgeModule(nn.Module):
                 # Truncate channels to 256
                 x = x[:, :256, :, :]
         
+        # Store residual for later
+        residual = self.residual_conv(x)
+        
+        # Normalize input
+        x = self.input_norm(x)
+        x = self.input_adapt(x)
+        
+        # Main network path
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu1(x)
@@ -62,8 +84,26 @@ class BridgeModule(nn.Module):
         x = self.bn3(x)
         x = self.relu3(x)
         
+        # Add residual connection with appropriate size handling
+        if x.shape == residual.shape:
+            x = x + residual
+        else:
+            if self.debug:
+                print(f"Shape mismatch for residual: x={x.shape}, residual={residual.shape}")
+            # Resize residual to match x if needed
+            if residual.shape[2:] != x.shape[2:]:
+                residual = F.interpolate(residual, size=x.shape[2:], mode='bilinear', align_corners=False)
+            
+            # Match channel dimension if needed
+            if residual.shape[1] != x.shape[1]:
+                # Use the first channels that match
+                channels_to_use = min(residual.shape[1], x.shape[1])
+                x[:, :channels_to_use] = x[:, :channels_to_use] + residual[:, :channels_to_use]
+            else:
+                x = x + residual
+        
         # Debug output shape
-        if hasattr(self, 'debug') and self.debug:
+        if self.debug:
             print(f"Bridge output shape: {x.shape}")
         
         return x

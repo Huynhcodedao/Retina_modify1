@@ -248,127 +248,87 @@ class LatentWiderFaceDataset(Dataset):
                 latent_tensor = latent_tensor.unsqueeze(0)
             
             if latent_tensor.shape[0] != 1:
-                print(f"Warning: Unexpected batch dimension in latent tensor: {latent_tensor.shape}")
-            
-            # Extract the latent features (remove batch dimension) if needed
-            if latent_tensor.shape[0] == 1:
-                latent_features = latent_tensor.squeeze(0)
-            else:
-                latent_features = latent_tensor
+                # If it has multiple batches, use only the first one
+                latent_tensor = latent_tensor[0:1]
                 
-            # Ensure the channel dimension is correct (should be 256)
-            if latent_features.shape[0] != 256:
-                print(f"Warning: Unexpected channel dimension: {latent_features.shape}. Reshaping to match 256 channels.")
-                
-                # If tensor is [C, H, W] with C != 256
-                if len(latent_features.shape) == 3:
-                    # Handle the case where channel dimension is wrong
-                    if latent_features.shape[0] < 256:
-                        # Duplicate existing channels to get to 256
-                        repeat_factor = int(np.ceil(256 / latent_features.shape[0]))
-                        expanded = latent_features.repeat(repeat_factor, 1, 1)
-                        latent_features = expanded[:256]
-                    else:
-                        # Truncate to 256 channels
-                        latent_features = latent_features[:256]
-                
-                # If tensor is [H, W] (missing channel dim)
-                elif len(latent_features.shape) == 2:
-                    # Treat the single channel as 256 by duplicating it
-                    h, w = latent_features.shape
-                    latent_features = latent_features.unsqueeze(0).repeat(256, 1, 1)
-                    print(f"Expanded 2D tensor of shape [{h}, {w}] to [256, {h}, {w}]")
-            
-            # Ensure the tensor has spatial dimensions of 40x40
-            if latent_features.shape[1] != 40 or latent_features.shape[2] != 40:
-                print(f"Resizing latent spatial dimensions from {latent_features.shape[1]}x{latent_features.shape[2]} to 40x40")
-                # Resize to match expected spatial dimensions
-                latent_features = torch.nn.functional.interpolate(
-                    latent_features.unsqueeze(0),  # Add batch dim for interpolation
-                    size=(40, 40),
-                    mode='bilinear'
-                ).squeeze(0)  # Remove batch dim
-            
-            # Verify final shape
-            if latent_features.shape != (256, 40, 40):
-                print(f"ERROR: Final tensor shape {latent_features.shape} doesn't match required (256, 40, 40)")
-                # Final fallback: create a zero tensor with correct shape
-                latent_features = torch.zeros((256, 40, 40))
-            
             # Process annotations
-            annots = self.annotations[index]
-            annotations = np.zeros((len(annots), 15))
+            face_annotations = self.annotations[index]
+            num_faces = len(face_annotations)
             
-            if len(annots) == 0:
-                # For empty annotations, return a dummy target
-                dummy_target = np.zeros((1, 15))
-                dummy_target[0, 14] = -1  # Mark as invalid
-                return latent_features, dummy_target
+            # Create an array to hold the data for all faces
+            # Format: [x1, y1, x2, y2, landmark_x1, landmark_y1, ..., landmark_x5, landmark_y5, label]
+            target_array = np.zeros((num_faces, 15))
             
-            # Lưu lại kích thước ảnh gốc để chuẩn hóa tọa độ
-            # Nếu không có kích thước thực tế, mặc định là 640x640 (như INPUT_SIZE)
-            img_width, img_height = 640, 640
+            # Get the expected image size from either the tensor or a fixed size
+            # For latent tensors, we need to work backwards to get original image size
+            image_width = 640  # Assuming the original image was 640x640
+            image_height = 640
             
-            for idx, face_data in enumerate(annots):
-                # Format the data to match the expected output format
-                
-                # bbox: Convert from x,y,w,h to x1,y1,x2,y2
-                if len(face_data) >= 4:
-                    # TRỌNG YẾU: Chuẩn hóa tọa độ về khoảng [0,1]
-                    annotations[idx, 0] = face_data[0] / img_width                 # x1
-                    annotations[idx, 1] = face_data[1] / img_height                # y1
-                    annotations[idx, 2] = (face_data[0] + face_data[2]) / img_width    # x2
-                    annotations[idx, 3] = (face_data[1] + face_data[3]) / img_height    # y2
-                else:
-                    print(f"Warning: Invalid bbox data for {self.ids[index]}, face {idx}")
-                
-                # landmarks: 5 points with x,y coordinates (10 values)
-                # If there are landmarks in the data (expected len >= 14)
-                if len(face_data) >= 14:
-                    # Process the 5 landmarks (10 values) - cũng chuẩn hóa về [0,1]
-                    annotations[idx, 4] = face_data[4] / img_width    # l0_x
-                    annotations[idx, 5] = face_data[5] / img_height   # l0_y
-                    annotations[idx, 6] = face_data[6] / img_width    # l1_x
-                    annotations[idx, 7] = face_data[7] / img_height   # l1_y
-                    annotations[idx, 8] = face_data[8] / img_width    # l2_x
-                    annotations[idx, 9] = face_data[9] / img_height   # l2_y
-                    annotations[idx, 10] = face_data[10] / img_width  # l3_x
-                    annotations[idx, 11] = face_data[11] / img_height # l3_y
-                    annotations[idx, 12] = face_data[12] / img_width  # l4_x
-                    annotations[idx, 13] = face_data[13] / img_height # l4_y
+            # Process each face annotation
+            for i, face in enumerate(face_annotations):
+                if len(face) >= 4:  # Ensure this face annotation has at least bbox
+                    # Extract bbox coordinates and normalize to [0,1]
+                    x = face[0] / image_width
+                    y = face[1] / image_height
+                    w = face[2] / image_width
+                    h = face[3] / image_height
                     
-                    # Set landmark valid flag (1 = valid)
-                    annotations[idx, 14] = 1
-                else:
-                    # If we don't have landmark data, mark landmarks as invalid
-                    annotations[idx, 14] = -1
-            
-            # Validate boxes have proper dimensions
-            for i in range(len(annotations)):
-                # Ensure width and height are at least 1 pixel (đã chuẩn hóa nên sẽ là 1/width và 1/height)
-                min_width = 1 / img_width
-                min_height = 1 / img_height
-                
-                if annotations[i, 2] <= annotations[i, 0] + min_width:
-                    annotations[i, 2] = annotations[i, 0] + min_width
-                if annotations[i, 3] <= annotations[i, 1] + min_height:
-                    annotations[i, 3] = annotations[i, 1] + min_height
+                    # Ensure width and height are positive and within bounds
+                    w = max(0.001, min(w, 1.0))
+                    h = max(0.001, min(h, 1.0))
                     
-                # Debug in ra một số box để kiểm tra
-                if i < 5:  # Chỉ in 5 box đầu tiên
-                    width = annotations[i, 2] - annotations[i, 0]
-                    height = annotations[i, 3] - annotations[i, 1]
-                    print(f"DEBUG: Normalized box {i}: ({annotations[i, 0]:.4f}, {annotations[i, 1]:.4f}, {annotations[i, 2]:.4f}, {annotations[i, 3]:.4f}), size={width:.4f}×{height:.4f}")
+                    # Convert to [x1, y1, x2, y2] format
+                    x1 = max(0.0, min(x, 1.0))
+                    y1 = max(0.0, min(y, 1.0))
+                    x2 = max(0.0, min(x + w, 1.0))
+                    y2 = max(0.0, min(y + h, 1.0))
+                    
+                    # Set bbox coordinates
+                    target_array[i, 0] = x1
+                    target_array[i, 1] = y1
+                    target_array[i, 2] = x2
+                    target_array[i, 3] = y2
+                    
+                    # Process landmarks if available
+                    if len(face) >= 14:  # 4 bbox + 10 landmarks
+                        has_landmarks = True
+                        for j in range(5):
+                            lm_x = face[4 + j*2] / image_width
+                            lm_y = face[5 + j*2] / image_height
+                            
+                            # Check if landmarks are valid (some datasets mark -1 for unavailable)
+                            if lm_x < 0 or lm_y < 0:
+                                has_landmarks = False
+                                break
+                            
+                            target_array[i, 4 + j*2] = lm_x
+                            target_array[i, 5 + j*2] = lm_y
+                        
+                        # Set landmark flag
+                        target_array[i, 14] = 1.0 if has_landmarks else -1.0
+                    else:
+                        # No landmarks
+                        target_array[i, 14] = -1.0
+                else:
+                    # Invalid face data
+                    target_array[i, 14] = -1.0
             
-            return latent_features, annotations
+            # Validate that we don't have any NaN or Inf values
+            if np.isnan(target_array).any() or np.isinf(target_array).any():
+                print(f"WARNING: NaN or Inf values found in annotations for item {index}. Fixing...")
+                target_array = np.nan_to_num(target_array, nan=0.0, posinf=1.0, neginf=0.0)
+            
+            # Convert annotations to tensor
+            target_tensor = torch.from_numpy(target_array).float()
+            
+            return latent_tensor, target_tensor
             
         except Exception as e:
-            print(f"Error loading item {index} ({self.ids[index]}): {e}")
-            # Return a dummy tensor and target as fallback
-            dummy_tensor = torch.zeros((256, 40, 40))
-            dummy_target = np.zeros((1, 15))
-            dummy_target[0, 14] = -1  # Mark as invalid
-            return dummy_tensor, dummy_target
+            print(f"Error processing item {index} ({self.ids[index]}): {e}")
+            # Return empty tensors as a fallback
+            empty_latent = torch.zeros((1, 256, 40, 40)).float()
+            empty_target = torch.zeros((0, 15)).float()
+            return empty_latent, empty_target
 
 def log_dataset(use_artifact, 
         artifact_name, 
