@@ -44,8 +44,8 @@ class MultiBoxLoss(nn.Module):
         self.variance       = [0.1, 0.2]
         self.device         = device
         
-        # Reduce overlap threshold to 0.2 for better matching with small faces
-        self.threshold = max(0.1, self.threshold * 0.5)
+        # Reduce overlap threshold to 0.1 for better matching with small faces
+        self.threshold = max(0.05, self.threshold * 0.3)
         print(f"DEBUG: Đã giảm ngưỡng overlap xuống {self.threshold}")
 
     def forward(self, predictions, priors, targets):
@@ -256,30 +256,60 @@ class MultiBoxLoss(nn.Module):
             # Force some boxes to be positive
             if total_faces > 0:
                 print("DEBUG: Đang thử dùng force matching...")
-                # Ở đây chúng ta chọn ngẫu nhiên một số anchor để gán nhãn dương
-                num_force = min(50, num_priors)  # Số lượng anchors sẽ được đặt là dương
-                random_idxs = torch.randint(0, num_priors, (num_force,))
                 
+                # For each batch item with faces
                 for b in range(num):
                     if len(targets[b]) > 0:
-                        # Chọn một ground truth ngẫu nhiên
-                        gt_idx = torch.randint(0, len(targets[b]), (1,)).item()
-                        gt_box = targets[b][gt_idx, :4]
-                        
-                        # Áp dụng cho một số anchors ngẫu nhiên
-                        for i in range(min(10, len(random_idxs))):
-                            conf_t[b, random_idxs[i]] = 1  # Gán nhãn dương
+                        # For each face in this batch item
+                        for face_idx in range(len(targets[b])):
+                            # Get the ground truth box
+                            gt_box = targets[b][face_idx, :4]
                             
-                            # Gán giá trị tọa độ từ ground truth
-                            anchor_box = priors[random_idxs[i]]
-                            loc_t[b, random_idxs[i], 0] = (gt_box[0] - anchor_box[0]) / (anchor_box[2] - anchor_box[0])
-                            loc_t[b, random_idxs[i], 1] = (gt_box[1] - anchor_box[1]) / (anchor_box[3] - anchor_box[1])
-                            loc_t[b, random_idxs[i], 2] = (gt_box[2] - anchor_box[0]) / (anchor_box[2] - anchor_box[0])
-                            loc_t[b, random_idxs[i], 3] = (gt_box[3] - anchor_box[1]) / (anchor_box[3] - anchor_box[1])
+                            # Calculate IoU with all anchors
+                            gt_box_tensor = gt_box.unsqueeze(0)  # [1, 4]
+                            anchor_tensor = priors  # [num_priors, 4]
                             
-                            # Gán random landmarks
-                            for j in range(10):
-                                landm_t[b, random_idxs[i], j] = torch.rand(1).item()
+                            # Calculate intersection
+                            xx1 = torch.max(gt_box_tensor[:, 0], anchor_tensor[:, 0])
+                            yy1 = torch.max(gt_box_tensor[:, 1], anchor_tensor[:, 1])
+                            xx2 = torch.min(gt_box_tensor[:, 2], anchor_tensor[:, 2])
+                            yy2 = torch.min(gt_box_tensor[:, 3], anchor_tensor[:, 3])
+                            
+                            w = torch.clamp(xx2 - xx1, min=0)
+                            h = torch.clamp(yy2 - yy1, min=0)
+                            
+                            inter = w * h
+                            
+                            # Calculate areas
+                            area_gt = (gt_box[2] - gt_box[0]) * (gt_box[3] - gt_box[1])
+                            area_anchor = (anchor_tensor[:, 2] - anchor_tensor[:, 0]) * (anchor_tensor[:, 3] - anchor_tensor[:, 1])
+                            
+                            # Calculate IoU
+                            union = area_gt + area_anchor - inter
+                            iou = inter / union
+                            
+                            # Find top 5 matching anchors
+                            top_k = 5
+                            top_iou, top_idx = iou.topk(min(top_k, len(iou)))
+                            
+                            # Use the best matching anchor
+                            if len(top_idx) > 0:
+                                best_idx = top_idx[0]
+                                conf_t[b, best_idx] = 1  # Set as positive match
+                                
+                                # Encode the box coordinates
+                                matched_box = gt_box.unsqueeze(0)
+                                prior_box = priors[best_idx].unsqueeze(0)
+                                encoded_box = encode(matched_box, prior_box, self.variance)
+                                loc_t[b, best_idx] = encoded_box
+                                
+                                # Set landmark data if available
+                                if targets[b][face_idx, 14] > 0:  # If landmarks are valid
+                                    landmarks = targets[b][face_idx, 4:14].unsqueeze(0)
+                                    encoded_landmarks = encode_landm(landmarks.reshape(1, 5, 2), prior_box, self.variance)
+                                    landm_t[b, best_idx] = encoded_landmarks
+                                
+                                print(f"Forced match for batch {b}, face {face_idx} with anchor {best_idx}, IoU: {top_iou[0]:.4f}")
                 
                 # Cập nhật lại pos1 và num_pos_landm
                 pos1 = conf_t > zeros
@@ -423,7 +453,8 @@ class MultiBoxLoss(nn.Module):
         
         # Thử giảm ngưỡng nếu có ít matches
         if best_default_overlap.max() < dynamic_threshold:
-            dynamic_threshold = max(0.1, best_default_overlap.max() * 0.8)
+            # Use a very low threshold (0.05) for debugging to find any matches
+            dynamic_threshold = max(0.05, best_default_overlap.max() * 0.5)
             if debug:
                 print(f"  Giảm ngưỡng tạm thời xuống {dynamic_threshold:.4f} để tìm matches tốt hơn")
         
@@ -485,5 +516,17 @@ class MultiBoxLoss(nn.Module):
                         
                         print(f"      Tỷ lệ width: min={min_width_ratio:.2f}, max={max_width_ratio:.2f}")
                         print(f"      Tỷ lệ height: min={min_height_ratio:.2f}, max={max_height_ratio:.2f}")
+                        
+                        # Find the best matching anchors even if they don't meet the criteria
+                        best_area_ratio_idx = torch.abs(area_ratios - 1.0).argmin().item()
+                        best_anchor = defaults[best_area_ratio_idx]
+                        best_anchor_width = best_anchor[2] - best_anchor[0]
+                        best_anchor_height = best_anchor[3] - best_anchor[1]
+                        best_anchor_area = best_anchor_width * best_anchor_height
+                        best_area_ratio = best_anchor_area / gt_area
+                        best_iou = overlaps[idx, best_area_ratio_idx].item()
+                        
+                        print(f"      Best area-matching anchor: size={best_anchor_width:.4f}×{best_anchor_height:.4f}, " +
+                              f"area ratio={best_area_ratio:.2f}, IoU={best_iou:.4f}")
         
         return num_matches

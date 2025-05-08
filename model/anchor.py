@@ -25,16 +25,16 @@ class Anchors(nn.Module):
             self.strides = [2 ** (x) for x in self.pyramid_levels]
             
         if sizes is None:
-            # Reduced base sizes to better match normalized small face boxes (0.01-0.05 range)
-            self.sizes = [2 ** (x) for x in self.pyramid_levels]
+            # Increased base sizes to better match normalized face boxes (0.01-0.23 range)
+            self.sizes = [2 ** (x+1) for x in self.pyramid_levels]
 
         if ratios is None:
-            # Add 1.5 ratio which is better for face shape (typically wider than tall)
-            self.ratios = [0.5, 1, 1.5]
+            # Add more ratios to better cover face shapes (typically wider than tall)
+            self.ratios = [0.5, 0.75, 1, 1.5, 2]
 
         if scales is None:
-            # Add more scales with smaller steps for better coverage of face sizes
-            self.scales = [2 ** (-1.0), 2 ** (-0.5), 2 ** 0, 2 ** 0.5]
+            # Use wider range of scales to better match face sizes
+            self.scales = [2 ** (-1.0), 2 ** (-0.5), 2 ** 0, 2 ** 0.5, 2 ** 1.0]
 
         if image_size is None: 
             self.image_size = np.array([INPUT_SIZE, INPUT_SIZE])
@@ -157,11 +157,11 @@ def generate_anchors(num_anchors=None, base_size=8, ratios=None, scales=None):
 
     if ratios is None:
         # Use wider variety of ratios for face detection
-        ratios = [0.5, 1, 1.5]
+        ratios = [0.5, 0.75, 1, 1.5, 2]
 
     if scales is None:
-        # Use smaller scales to generate anchors better matching small faces
-        scales = [2 ** (-1.0), 2 ** (-0.5), 2 ** 0, 2 ** 0.5]  
+        # Use wider range of scales to match face sizes in dataset
+        scales = [2 ** (-1.0), 2 ** (-0.5), 2 ** 0, 2 ** 0.5, 2 ** 1.0]  
 
     if num_anchors == None:
         num_anchors = len(ratios) * len(scales)

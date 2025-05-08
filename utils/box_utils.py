@@ -81,8 +81,8 @@ def match(threshold, truths, priors, variances, labels, landms, loc_t, conf_t, l
     # [1,num_objects] best prior for each ground truth
     best_prior_overlap, best_prior_idx = overlaps.max(1, keepdim=True)
 
-    # Lower threshold for valid GT to 0.15 (was 0.2) since faces are small
-    valid_gt_idx = best_prior_overlap[:, 0] >= 0.15
+    # Lower threshold for valid GT to 0.1 (was 0.2) since faces are small
+    valid_gt_idx = best_prior_overlap[:, 0] >= 0.1
     best_prior_idx_filter = best_prior_idx[valid_gt_idx, :]
 
     if best_prior_idx_filter.shape[0] <= 0:
