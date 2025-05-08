@@ -114,11 +114,21 @@ class FPN(nn.Module):
         names   = list(input.keys())
         input   = list(input.values())
 
-        output1 = self.layer_feature_1(input[0])
-        output2 = self.layer_feature_2(input[1])
-        output3 = self.layer_feature_3(input[2])
-        output4 = self.layer_feature_4(input[3])
-        output5 = self.layer_feature_5(input[3])
+        # Kiểm tra số lượng feature maps
+        if len(input) == 3:  # Trường hợp sử dụng latent (out_feature2, out_feature3, out_feature4)
+            # Đối với latent, chúng ta không có out_feature1
+            # Sử dụng directly out_feature2 cho output1
+            output1 = self.layer_feature_1(input[0])
+            output2 = self.layer_feature_2(input[0])  # Sử dụng feature đầu tiên (out_feature2)
+            output3 = self.layer_feature_3(input[1])  # Sử dụng feature thứ hai (out_feature3)
+            output4 = self.layer_feature_4(input[2])  # Sử dụng feature thứ ba (out_feature4)
+            output5 = self.layer_feature_5(input[2])  # Tạo feature thứ năm từ out_feature4
+        else:  # Trường hợp sử dụng RGB bình thường (4 feature maps)
+            output1 = self.layer_feature_1(input[0])
+            output2 = self.layer_feature_2(input[1])
+            output3 = self.layer_feature_3(input[2])
+            output4 = self.layer_feature_4(input[3])
+            output5 = self.layer_feature_5(input[3])
 
         # output5 = self.upsample(output5)
         # output4 = self.upsample(output4)

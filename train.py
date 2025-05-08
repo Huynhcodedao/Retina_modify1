@@ -36,9 +36,9 @@ def parse_args():
     parser.add_argument('--device', type=str, default='', help="no plot image for tuning")
     parser.add_argument('--use_latent', action='store_true', help="use latent representation as input instead of RGB images")
     parser.add_argument('--latent_dir', type=str, default='latent', help="directory containing latent representation files")
-    parser.add_argument('--label_dir', type=str, default='labelstxt', help="directory containing annotation files")
+    parser.add_argument('--label_file', type=str, default='labels.txt', help="file containing annotations")
     parser.add_argument('--latent_suffix', type=str, default='latent_75.npy', help="specific latent file to use")
-    parser.add_argument('--cpu', action='store_true', help="force using CPU even if GPU is available")
+    parser.add_argument('--debug', action='store_true', help="enable debug mode with shapes printed")
 
     args = parser.parse_args()
     return args
@@ -144,19 +144,7 @@ if __name__ == '__main__':
         print("Continuing with local data...")
 
     # train on device
-    if args.cpu:
-        device = torch.device('cpu')
-        print("Using CPU for training")
-    else:
-        device = select_device(args.device, args.batchsize)
-
-    # Điều chỉnh batch size nếu sử dụng GPU và gặp lỗi OOM
-    batch_size = args.batchsize
-    if torch.cuda.is_available() and not args.cpu:
-        # Giảm batch size xuống 2 nếu dùng GPU
-        if batch_size > 2:
-            batch_size = 2
-            print(f"Reduced batch size to {batch_size} for GPU training")
+    device = select_device(args.device, args.batchsize)
 
     # get dataloader
     if args.use_latent or USE_LATENT:
@@ -165,14 +153,14 @@ if __name__ == '__main__':
         train_set = LatentWiderFaceDataset(
             root_path=DATA_PATH, 
             latent_dir=args.latent_dir, 
-            label_file='labels.txt',
+            label_file=args.label_file,
             latent_suffix=args.latent_suffix,
             is_train=True
         )
         valid_set = LatentWiderFaceDataset(
             root_path=DATA_PATH, 
             latent_dir=args.latent_dir, 
-            label_file='labels.txt',
+            label_file=args.label_file,
             latent_suffix=args.latent_suffix,
             is_train=False
         )
@@ -185,8 +173,8 @@ if __name__ == '__main__':
 
     torch.manual_seed(RANDOM_SEED)
 
-    trainloader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=NUM_WORKERS, collate_fn=detection_collate)
-    validloader = DataLoader(valid_set, batch_size=batch_size, shuffle=False, num_workers=NUM_WORKERS, collate_fn=detection_collate)
+    trainloader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS, collate_fn=detection_collate)
+    validloader = DataLoader(valid_set, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS, collate_fn=detection_collate)
 
     n_classes = N_CLASSES
     epochs = args.epoch
@@ -197,7 +185,8 @@ if __name__ == '__main__':
     model = RetinaFace(
         model_name=args.model, 
         freeze_backbone=args.freeze,
-        use_latent=args.use_latent or USE_LATENT
+        use_latent=args.use_latent or USE_LATENT,
+        debug=args.debug
     ).to(device)
     
     if args.weight is not None and os.path.isfile(args.weight):

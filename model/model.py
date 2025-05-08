@@ -29,6 +29,9 @@ class BridgeModule(nn.Module):
         self.relu3 = nn.ReLU(inplace=True)
         
     def forward(self, x):
+        # Print để debug kích thước đầu vào
+        # print(f"Bridge input shape: {x.shape}")
+        
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu1(x)
@@ -40,6 +43,9 @@ class BridgeModule(nn.Module):
         x = self.upconv2(x)
         x = self.bn3(x)
         x = self.relu3(x)
+        
+        # Print để debug kích thước đầu ra
+        # print(f"Bridge output shape: {x.shape}")
         
         return x
 
@@ -84,7 +90,7 @@ class LandmarkHead(nn.Module):
         return out.view(out.shape[0], -1, 10)
 
 class RetinaFace(nn.Module):
-    def __init__(self, model_name='resnet50', freeze_backbone=False, pretrain_path=None, is_train=True, use_latent=False):
+    def __init__(self, model_name='resnet50', freeze_backbone=False, pretrain_path=None, is_train=True, use_latent=False, debug=False):
         """
         Model RetinaFace for face recognition based on:
         `"RetinaFace: Single-stage Dense Face Localisation in the Wild" <https://arxiv.org/abs/1905.00641>`_.
@@ -95,10 +101,15 @@ class RetinaFace(nn.Module):
             pretrain_path (str): Path to pretrained weights
             is_train (bool): Whether the model is in training mode
             use_latent (bool): Whether to use latent representations instead of RGB images
+            debug (bool): Whether to print debug information
         """
         super(RetinaFace, self).__init__()
         self.is_train = is_train
         self.use_latent = use_latent
+        self.debug = debug
+        
+        if self.debug:
+            print(f"Initializing RetinaFace with model_name={model_name}, use_latent={use_latent}")
         
         # load backbone
         backbone = None
@@ -155,16 +166,20 @@ class RetinaFace(nn.Module):
                 backbone = new_backbone
                 
             self.body = IntermediateLayerGetter(backbone, modified_return_feature)
+            
+            # Các kênh đầu vào khác nhau cho mô hình latent
+            # ResNet50 output channels: layer2=512, layer3=1024, layer4=2048
+            in_channels_list = [512, 512, 1024, 2048]
         else:
             # Original implementation for RGB image input
             self.body = IntermediateLayerGetter(backbone, return_feature)
+            in_channels_list = [IN_CHANNELS*2, IN_CHANNELS*4, IN_CHANNELS*8, IN_CHANNELS*16]
 
         if freeze_backbone:
             for param in self.body.parameters():
                 param.requires_grad = False
             print('\tBackbone freezed')
 
-        in_channels_list = [IN_CHANNELS*2, IN_CHANNELS*4, IN_CHANNELS*8, IN_CHANNELS*16]
         self.fpn = FPN(in_channels_list=in_channels_list, out_channels=OUT_CHANNELS)
         self.ssh = SSH(in_channels=OUT_CHANNELS, out_channels=OUT_CHANNELS)
 
@@ -199,25 +214,41 @@ class RetinaFace(nn.Module):
             input (Tensor): For regular input - RGB image(s) [B, 3, H, W]
                             For latent input - latent representation [B, 256, 40, 40]
         """
+        if self.debug:
+            print(f"Input shape: {input.shape}")
+            
         if self.use_latent:
             # For latent input, first pass through bridge module to match expected size
             x = self.bridge(input)
             
-            # Create a dictionary to simulate the output of IntermediateLayerGetter
-            # where 'layer1' would normally be the output
-            input_dict = {'out_feature1': x}
+            if self.debug:
+                print(f"After bridge shape: {x.shape}")
             
             # Feed directly to layer2 of backbone
             out = self.body(x)
             
-            # Add the bridge output as the first feature map
-            out['out_feature1'] = input_dict['out_feature1']
+            if self.debug:
+                print(f"Backbone output keys: {out.keys()}")
+                for k, v in out.items():
+                    print(f"  {k} shape: {v.shape}")
+            
+            # Feature Pyramid Net - với latent inputs, chúng ta không cần out_feature1
+            fpn = self.fpn(out)
         else:
             # Original implementation for RGB input
             out = self.body(input)
+            
+            if self.debug:
+                print(f"Backbone output keys: {out.keys()}")
+                for k, v in out.items():
+                    print(f"  {k} shape: {v.shape}")
+            
+            # Feature Pyramid Net - RGB inputs có đủ 4 feature maps
+            fpn = self.fpn(out)
 
-        # Feature Pyramid Net
-        fpn = self.fpn(out)
+        if self.debug:
+            for i, feature in enumerate(fpn):
+                print(f"FPN output {i} shape: {feature.shape}")
 
         # Single-stage headless
         feature_1 = self.ssh(fpn[0])
@@ -230,6 +261,11 @@ class RetinaFace(nn.Module):
         bbox_regressions = torch.cat([self.BboxHead[i](feature) for i, feature in enumerate(features)], dim=1)
         classifications  = torch.cat([self.ClassHead[i](feature) for i, feature in enumerate(features)], dim=1)
         ldm_regressions  = torch.cat([self.LandmarkHead[i](feature) for i, feature in enumerate(features)], dim=1)
+
+        if self.debug:
+            print(f"bbox_regressions shape: {bbox_regressions.shape}")
+            print(f"classifications shape: {classifications.shape}")
+            print(f"ldm_regressions shape: {ldm_regressions.shape}")
 
         if self.is_train:
             output = (bbox_regressions, classifications, ldm_regressions)
