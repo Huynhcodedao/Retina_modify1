@@ -124,37 +124,94 @@ if __name__ == '__main__':
     print("\nĐang kiểm tra cấu trúc thư mục:")
     import os
     
-    print(f"Thư mục hiện tại: {os.getcwd()}")
-    print("Danh sách thư mục và file trong thư mục hiện tại:")
-    for f in os.listdir():
-        if os.path.isdir(f):
-            print(f"  [Thư mục] {f}")
-        else:
-            print(f"  [File] {f}")
+    # Lưu thư mục hiện tại
+    current_dir = os.getcwd()
+    print(f"Thư mục hiện tại: {current_dir}")
     
-    if os.path.exists("data"):
-        print("\nNội dung trong thư mục data:")
-        for f in os.listdir("data"):
-            print(f"  {f}")
-            data_path = os.path.join("data", f)
-            if os.path.isdir(data_path):
-                print(f"    Nội dung trong {data_path}:")
-                try:
-                    for subf in os.listdir(data_path):
-                        print(f"      {subf}")
-                except Exception as e:
-                    print(f"      Lỗi: {e}")
-    else:
-        print("\nKhông tìm thấy thư mục data trong thư mục hiện tại!")
-        print("Đang tìm kiếm thư mục có thể chứa dữ liệu...")
+    # Tìm thư mục data
+    data_path = args.data_path
+    if not os.path.exists(data_path):
+        print(f"Không tìm thấy thư mục dữ liệu tại {data_path}!")
         
-        # Các tên thư mục thường dùng để lưu dữ liệu
-        possible_data_dirs = ["data", "dataset", "datasets", "DATA", "DATASET", "train", "test"]
-        for dir_name in possible_data_dirs:
-            if os.path.exists(dir_name):
-                print(f"Tìm thấy thư mục {dir_name}:")
-                for f in os.listdir(dir_name):
-                    print(f"  {f}")
+        # Kiểm tra các đường dẫn tuyệt đối thường dùng trong Kaggle
+        kaggle_paths = [
+            "/kaggle/working/Retina_modify1/data",
+            "/kaggle/working/data",
+            "/kaggle/input/data"
+        ]
+        
+        for path in kaggle_paths:
+            if os.path.exists(path):
+                data_path = path
+                args.data_path = path
+                print(f"Đã tìm thấy thư mục dữ liệu tại: {path}")
+                break
+        
+        # Tìm ở thư mục cha
+        if not os.path.exists(data_path):
+            parent_dir = os.path.dirname(current_dir)
+            potential_data_path = os.path.join(parent_dir, "data")
+            if os.path.exists(potential_data_path):
+                data_path = potential_data_path
+                args.data_path = potential_data_path
+                print(f"Đã tìm thấy thư mục dữ liệu tại: {potential_data_path}")
+            
+            # Tìm ở thư mục cha của cha
+            if not os.path.exists(data_path):
+                grandparent_dir = os.path.dirname(parent_dir)
+                potential_data_path = os.path.join(grandparent_dir, "data")
+                if os.path.exists(potential_data_path):
+                    data_path = potential_data_path
+                    args.data_path = potential_data_path
+                    print(f"Đã tìm thấy thư mục dữ liệu tại: {potential_data_path}")
+    
+    # Nếu đã tìm thấy thư mục data, kiểm tra cấu trúc
+    if os.path.exists(data_path):
+        print(f"\nNội dung trong thư mục dữ liệu {data_path}:")
+        try:
+            for f in os.listdir(data_path):
+                f_path = os.path.join(data_path, f)
+                if os.path.isdir(f_path):
+                    print(f"  [Thư mục] {f}")
+                    # Liệt kê nội dung thư mục con
+                    try:
+                        subfiles = os.listdir(f_path)
+                        for sf in subfiles[:5]:  # Chỉ hiển thị 5 file/thư mục đầu tiên
+                            sf_path = os.path.join(f_path, sf)
+                            if os.path.isdir(sf_path):
+                                print(f"    [Thư mục] {sf}")
+                                # Liệt kê một số file trong thư mục con
+                                try:
+                                    subsubfiles = os.listdir(sf_path)
+                                    if subsubfiles:
+                                        print(f"      Ví dụ: {', '.join(subsubfiles[:3])}" + ("..." if len(subsubfiles) > 3 else ""))
+                                except:
+                                    pass
+                            else:
+                                print(f"    [File] {sf}")
+                        if len(subfiles) > 5:
+                            print(f"    ... và {len(subfiles) - 5} file/thư mục khác")
+                    except Exception as e:
+                        print(f"    Lỗi: {e}")
+                else:
+                    print(f"  [File] {f}")
+        except Exception as e:
+            print(f"Lỗi khi liệt kê nội dung thư mục: {e}")
+    else:
+        print(f"\nKhông tìm thấy thư mục dữ liệu ở bất kỳ vị trí nào!")
+        print("Vui lòng chỉ định đường dẫn tuyệt đối đến thư mục dữ liệu với --data_path")
+    
+    # Cập nhật các đường dẫn cho train và validation
+    args.train_latent_path = os.path.join(args.data_path, TRAIN_PATH, args.latent_dir)
+    args.val_latent_path = os.path.join(args.data_path, VALID_PATH, args.latent_dir)
+    args.train_label_path = os.path.join(args.data_path, TRAIN_PATH, args.label_file)
+    args.val_label_path = os.path.join(args.data_path, VALID_PATH, args.label_file)
+    
+    print(f"\nĐường dẫn được sử dụng:")
+    print(f"  Train latent: {args.train_latent_path}")
+    print(f"  Train labels: {args.train_label_path}")
+    print(f"  Val latent: {args.val_latent_path}")
+    print(f"  Val labels: {args.val_label_path}")
     
     # init wandb
     config = dict(
