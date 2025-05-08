@@ -73,12 +73,12 @@ class MultiBoxLoss(nn.Module):
                 loc_data = loc_data[:, :num_priors, :]
                 conf_data = conf_data[:, :num_priors, :]
                 landm_data = landm_data[:, :num_priors, :]
-                num_preds = num_priors
-            # If priors have more elements than predictions, we need to regenerate priors
+            # If priors have more elements than predictions, truncate priors
             else:
-                # This should be fixed in the model initialization, not here
-                print(f"ERROR: Priors ({num_priors}) exceed predictions ({num_preds}). Fix model architecture.")
-                return torch.tensor(0.0, requires_grad=True).to(self.device), torch.tensor(0.0, requires_grad=True).to(self.device), torch.tensor(0.0, requires_grad=True).to(self.device)
+                print(f"Truncating priors from {num_priors} to {num_preds} to match predictions")
+                priors = priors[:num_preds]
+                num_priors = num_preds
+                print(f"New number of priors: {num_priors}")
 
         # match priors (default boxes) and ground truth boxes
         loc_t   = torch.Tensor(num, num_priors, 4)

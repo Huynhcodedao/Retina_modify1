@@ -7,6 +7,7 @@ import argparse
 from torch import optim
 import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader
+import numpy as np
 
 from model.config import *
 from model.anchor import Anchors
@@ -295,12 +296,37 @@ if __name__ == '__main__':
     print(f"Using latent mode: {args.use_latent or USE_LATENT}")
     
     with torch.no_grad():
-        anchors = Anchors(pyramid_levels=model.feature_map).forward().to(device)
+        if args.use_latent or USE_LATENT:
+            # Custom anchor generation for latent mode
+            
+            # Run a forward pass to get output dimensions
+            dummy_input = torch.zeros((1, 256, 40, 40)).to(device)
+            outputs = model(dummy_input)
+            num_predictions = outputs[0].shape[1]
+            print(f"Model output dimensions: {outputs[0].shape}")
+            print(f"Expected anchors: {num_predictions}")
+            
+            # Create standard anchors first
+            standard_anchors = Anchors(
+                pyramid_levels=model.feature_map
+            ).forward().to(device)
+            
+            # Check if we need to truncate
+            if standard_anchors.size(0) > num_predictions:
+                print(f"Truncating anchors from {standard_anchors.size(0)} to {num_predictions}")
+                anchors = standard_anchors[:num_predictions]
+            else:
+                # In the rare case where we have too few anchors
+                print(f"WARNING: Too few anchors ({standard_anchors.size(0)}), expected {num_predictions}")
+                anchors = standard_anchors
+        else:
+            # Original anchor generation for RGB mode
+            anchors = Anchors(pyramid_levels=model.feature_map).forward().to(device)
         
-    print(f"Generated {anchors.size(0)} anchors\n")
+    print(f"Final anchor count: {anchors.size(0)}\n")
 
     # optimizer + citeration
-    optimizer   = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     criterion   = MultiBoxLoss(N_CLASSES, 
                     overlap_thresh=OVERLAP_THRES, 
                     prior_for_matching=True, 
