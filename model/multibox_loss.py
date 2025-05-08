@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-from utils.box_utils import match, log_sum_exp
+from utils.box_utils import match, log_sum_exp, encode, encode_landm
 import numpy as np
 
 class MultiBoxLoss(nn.Module):
