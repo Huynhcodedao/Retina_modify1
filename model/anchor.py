@@ -155,10 +155,12 @@ def generate_anchors(num_anchors=None, base_size=8, ratios=None, scales=None):
     """
 
     if ratios is None:
-        ratios = [0.5, 1, 2]
+        # Thêm tỷ lệ 1.5 (width/height) để phù hợp hơn với khuôn mặt (thường rộng hơn cao)
+        ratios = [0.5, 1, 1.5]
 
     if scales is None:
-        scales = [2 ** 0, 2 ** (1.0 / 3.0), 2 ** (2.0 / 3.0)]
+        # Thêm thang đo lớn hơn để phủ khuôn mặt lớn hơn
+        scales = [2 ** 0, 2 ** (1.0 / 3.0), 2 ** (2.0 / 3.0), 2 ** 1.0]  
 
     if num_anchors == None:
         num_anchors = len(ratios) * len(scales)

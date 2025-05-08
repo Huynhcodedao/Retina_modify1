@@ -305,32 +305,37 @@ class LatentWiderFaceDataset(Dataset):
                 dummy_target[0, 14] = -1  # Mark as invalid
                 return latent_features, dummy_target
             
+            # Lưu lại kích thước ảnh gốc để chuẩn hóa tọa độ
+            # Nếu không có kích thước thực tế, mặc định là 640x640 (như INPUT_SIZE)
+            img_width, img_height = 640, 640
+            
             for idx, face_data in enumerate(annots):
                 # Format the data to match the expected output format
                 
                 # bbox: Convert from x,y,w,h to x1,y1,x2,y2
                 if len(face_data) >= 4:
-                    annotations[idx, 0] = face_data[0]                   # x1
-                    annotations[idx, 1] = face_data[1]                   # y1
-                    annotations[idx, 2] = face_data[0] + face_data[2]    # x2
-                    annotations[idx, 3] = face_data[1] + face_data[3]    # y2
+                    # TRỌNG YẾU: Chuẩn hóa tọa độ về khoảng [0,1]
+                    annotations[idx, 0] = face_data[0] / img_width                 # x1
+                    annotations[idx, 1] = face_data[1] / img_height                # y1
+                    annotations[idx, 2] = (face_data[0] + face_data[2]) / img_width    # x2
+                    annotations[idx, 3] = (face_data[1] + face_data[3]) / img_height    # y2
                 else:
                     print(f"Warning: Invalid bbox data for {self.ids[index]}, face {idx}")
                 
                 # landmarks: 5 points with x,y coordinates (10 values)
                 # If there are landmarks in the data (expected len >= 14)
                 if len(face_data) >= 14:
-                    # Process the 5 landmarks (10 values)
-                    annotations[idx, 4] = face_data[4]    # l0_x
-                    annotations[idx, 5] = face_data[5]    # l0_y
-                    annotations[idx, 6] = face_data[6]    # l1_x
-                    annotations[idx, 7] = face_data[7]    # l1_y
-                    annotations[idx, 8] = face_data[8]    # l2_x
-                    annotations[idx, 9] = face_data[9]    # l2_y
-                    annotations[idx, 10] = face_data[10]  # l3_x
-                    annotations[idx, 11] = face_data[11]  # l3_y
-                    annotations[idx, 12] = face_data[12]  # l4_x
-                    annotations[idx, 13] = face_data[13]  # l4_y
+                    # Process the 5 landmarks (10 values) - cũng chuẩn hóa về [0,1]
+                    annotations[idx, 4] = face_data[4] / img_width    # l0_x
+                    annotations[idx, 5] = face_data[5] / img_height   # l0_y
+                    annotations[idx, 6] = face_data[6] / img_width    # l1_x
+                    annotations[idx, 7] = face_data[7] / img_height   # l1_y
+                    annotations[idx, 8] = face_data[8] / img_width    # l2_x
+                    annotations[idx, 9] = face_data[9] / img_height   # l2_y
+                    annotations[idx, 10] = face_data[10] / img_width  # l3_x
+                    annotations[idx, 11] = face_data[11] / img_height # l3_y
+                    annotations[idx, 12] = face_data[12] / img_width  # l4_x
+                    annotations[idx, 13] = face_data[13] / img_height # l4_y
                     
                     # Set landmark valid flag (1 = valid)
                     annotations[idx, 14] = 1
@@ -340,11 +345,20 @@ class LatentWiderFaceDataset(Dataset):
             
             # Validate boxes have proper dimensions
             for i in range(len(annotations)):
-                # Ensure width and height are at least 1 pixel
-                if annotations[i, 2] <= annotations[i, 0]:
-                    annotations[i, 2] = annotations[i, 0] + 1
-                if annotations[i, 3] <= annotations[i, 1]:
-                    annotations[i, 3] = annotations[i, 1] + 1
+                # Ensure width and height are at least 1 pixel (đã chuẩn hóa nên sẽ là 1/width và 1/height)
+                min_width = 1 / img_width
+                min_height = 1 / img_height
+                
+                if annotations[i, 2] <= annotations[i, 0] + min_width:
+                    annotations[i, 2] = annotations[i, 0] + min_width
+                if annotations[i, 3] <= annotations[i, 1] + min_height:
+                    annotations[i, 3] = annotations[i, 1] + min_height
+                    
+                # Debug in ra một số box để kiểm tra
+                if i < 5:  # Chỉ in 5 box đầu tiên
+                    width = annotations[i, 2] - annotations[i, 0]
+                    height = annotations[i, 3] - annotations[i, 1]
+                    print(f"DEBUG: Normalized box {i}: ({annotations[i, 0]:.4f}, {annotations[i, 1]:.4f}, {annotations[i, 2]:.4f}, {annotations[i, 3]:.4f}), size={width:.4f}×{height:.4f}")
             
             return latent_features, annotations
             
