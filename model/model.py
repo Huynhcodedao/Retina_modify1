@@ -5,7 +5,43 @@ import torch.nn.functional as F
 
 from model.config import *
 from model._utils import IntermediateLayerGetter
-from model.common import FPN, SSH, MobileNetV1, BridgeModule
+from model.common import FPN, SSH, MobileNetV1
+
+class BridgeModule(nn.Module):
+    def __init__(self, in_channels=256, out_channels=256):
+        """
+        Bridge module to transform latent representation [1, 256, 40, 40] to [256, 160, 160]
+        to match the expected input size for stage 2 of ResNet50
+        """
+        super(BridgeModule, self).__init__()
+        
+        # Upsampling pathway using transposed convolutions
+        self.conv1 = nn.Conv2d(in_channels, 512, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(512)
+        self.relu1 = nn.ReLU(inplace=True)
+        
+        self.upconv1 = nn.ConvTranspose2d(512, 512, kernel_size=4, stride=2, padding=1)
+        self.bn2 = nn.BatchNorm2d(512)
+        self.relu2 = nn.ReLU(inplace=True)
+        
+        self.upconv2 = nn.ConvTranspose2d(512, out_channels, kernel_size=4, stride=2, padding=1)
+        self.bn3 = nn.BatchNorm2d(out_channels)
+        self.relu3 = nn.ReLU(inplace=True)
+        
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu1(x)
+        
+        x = self.upconv1(x)
+        x = self.bn2(x)
+        x = self.relu2(x)
+        
+        x = self.upconv2(x)
+        x = self.bn3(x)
+        x = self.relu3(x)
+        
+        return x
 
 class ClassHead(nn.Module):
     def __init__(self, in_channels, num_anchors=3):
@@ -48,21 +84,21 @@ class LandmarkHead(nn.Module):
         return out.view(out.shape[0], -1, 10)
 
 class RetinaFace(nn.Module):
-    def __init__(self, model_name='resnet50', freeze_backbone=False, pretrain_path=None, is_train=True, use_latent_input=False):
+    def __init__(self, model_name='resnet50', freeze_backbone=False, pretrain_path=None, is_train=True, use_latent=False):
         """
         Model RetinaFace for face recognition based on:
         `"RetinaFace: Single-stage Dense Face Localisation in the Wild" <https://arxiv.org/abs/1905.00641>`_.
         
         Args:
-            model_name (str): Name of backbone ('resnet50', 'mobilenet0.25', etc.)
-            freeze_backbone (bool): Whether to freeze backbone weights
+            model_name (str): Name of the backbone model
+            freeze_backbone (bool): Whether to freeze the backbone
             pretrain_path (str): Path to pretrained weights
-            is_train (bool): Whether in training mode
-            use_latent_input (bool): Whether to use latent representation as input [256, 40, 40]
+            is_train (bool): Whether the model is in training mode
+            use_latent (bool): Whether to use latent representations instead of RGB images
         """
         super(RetinaFace, self).__init__()
         self.is_train = is_train
-        self.use_latent_input = use_latent_input
+        self.use_latent = use_latent
         
         # load backbone
         backbone = None
@@ -98,17 +134,30 @@ class RetinaFace(nn.Module):
 
         num_fpn             = len(self.feature_map)
         
-        # For latent input, use the bridge module and skip the initial stages of ResNet
-        if use_latent_input and 'resnet' in model_name:
+        if use_latent:
+            # For latent input, we'll use a custom Bridge module and modified backbone
             self.bridge = BridgeModule(in_channels=256, out_channels=256)
             
-            # Modified return feature layers - skip stage 0 and stage 1
-            return_feature = {'layer2': 'out_feature2', 
-                            'layer3': 'out_feature3',
-                            'layer4': 'out_feature4'}
-        
-        # frozen pre-trained backbone
-        self.body = IntermediateLayerGetter(backbone, return_feature)
+            # We need to modify the return_feature to skip the first two stages (stage 0 and stage 1)
+            # of ResNet50 and only use stages 2, 3, and 4
+            modified_return_feature = {'layer2': 'out_feature2', 
+                                       'layer3': 'out_feature3',
+                                       'layer4': 'out_feature4'}
+            
+            # Create a modified backbone without the first two stages
+            # For ResNet50, we'll only use the last 3 stages (layer2, layer3, layer4)
+            if 'resnet' in model_name:
+                # We'll create a new sequential model with only the needed layers
+                new_backbone = nn.Module()
+                new_backbone.layer2 = backbone.layer2
+                new_backbone.layer3 = backbone.layer3
+                new_backbone.layer4 = backbone.layer4
+                backbone = new_backbone
+                
+            self.body = IntermediateLayerGetter(backbone, modified_return_feature)
+        else:
+            # Original implementation for RGB image input
+            self.body = IntermediateLayerGetter(backbone, return_feature)
 
         if freeze_backbone:
             for param in self.body.parameters():
@@ -144,33 +193,27 @@ class RetinaFace(nn.Module):
 
     def forward(self, input):
         """
-        The input to the RetinaFace can be either RGB images or latent representations
+        The input to the RetinaFace is expected to be a Tensor
         
         Args:
-            input (Tensor): image(s) or latent representation for feed forward
-                - RGB image: [batch_size, 3, height, width]
-                - Latent: [batch_size, 256, 40, 40]
+            input (Tensor): For regular input - RGB image(s) [B, 3, H, W]
+                            For latent input - latent representation [B, 256, 40, 40]
         """
-        # For latent input, apply bridge module to connect to stage 2 of ResNet
-        if self.use_latent_input:
-            # Apply bridge module to convert [256, 40, 40] to [256, 160, 160]
-            bridge_output = self.bridge(input)
+        if self.use_latent:
+            # For latent input, first pass through bridge module to match expected size
+            x = self.bridge(input)
             
-            # Custom forward through backbone (skipping stage 0 and 1)
-            out = {}
-            # Feed directly into layer2 (stage 2) of ResNet
-            x = bridge_output
+            # Create a dictionary to simulate the output of IntermediateLayerGetter
+            # where 'layer1' would normally be the output
+            input_dict = {'out_feature1': x}
             
-            # Manual forward through remaining ResNet layers
-            for name, module in self.body.items():
-                if name == 'layer1':  # Skip layer1 (already processed by bridge)
-                    continue
-                x = module(x)
-                if name in self.body.return_layers:
-                    out_name = self.body.return_layers[name]
-                    out[out_name] = x
+            # Feed directly to layer2 of backbone
+            out = self.body(x)
+            
+            # Add the bridge output as the first feature map
+            out['out_feature1'] = input_dict['out_feature1']
         else:
-            # Standard forward through the entire backbone
+            # Original implementation for RGB input
             out = self.body(input)
 
         # Feature Pyramid Net

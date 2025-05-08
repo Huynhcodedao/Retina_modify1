@@ -1,17 +1,17 @@
-PROJECT             = 'Retina-Face'
+PROJECT             = 'retina-face-detector'
 RUN_NAME            = 'resnet18'
 # DATA config ================
 DATA_PATH           = './data'
 N_CLASSES           = 2
-TRAIN_PATH          = './train'
-VALID_PATH          = './val'
+TRAIN_PATH          = 'train'
+VALID_PATH          = 'val'
 TEST_PATH           = './test'
 SAVE_PATH           = './model'
 
 DATASET             = 'wider-face-4k' 
 DVERSION            = 'latest'
 INPUT_SIZE          = 640
-BATCH_SIZE          = 8
+BATCH_SIZE          = 2
 RANDOM_SEED         = 42
 NUM_WORKERS         = 0
 
@@ -25,6 +25,10 @@ MOMENTUM            = 0.9
 
 IN_CHANNELS         = 32
 OUT_CHANNELS        = 64
+
+# LATENT MODE CONFIG ========
+USE_LATENT          = True  # Set to True to use latent representation instead of RGB images
+LATENT_INPUT_SHAPE  = (256, 40, 40)  # Input shape of the latent representation
 
 # MobileNetV1
 # FEATURE_MAP_MOBN1   =  {'layer2': 160,

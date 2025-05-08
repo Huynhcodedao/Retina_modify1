@@ -2,27 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class BridgeModule(nn.Module):
-    def __init__(self, in_channels=256, out_channels=256):
-        """
-        Bridge module to convert latent representation [256, 40, 40] to match
-        the input size required for ResNet50 stage 2 [256, 160, 160]
-        """
-        super(BridgeModule, self).__init__()
-        
-        # First use interpolation to upsample from 40x40 to 160x160
-        self.upsample_block = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True)
-        )
-        
-    def forward(self, x):
-        # Upsample from 40x40 to 160x160
-        x = F.interpolate(x, scale_factor=4, mode='bilinear', align_corners=False)
-        x = self.upsample_block(x)
-        return x
-
 class Conv_DW(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1, leaky=0.1):
         super(Conv_DW, self).__init__()

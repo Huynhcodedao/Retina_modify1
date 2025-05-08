@@ -3,281 +3,10 @@ import torch
 import wandb
 import numpy as np
 from utils.data_augment import WiderFacePreprocess
-from model.config import INPUT_SIZE, TRAIN_PATH, VALID_PATH
+from model.config import INPUT_SIZE, TRAIN_PATH, VALID_PATH, LATENT_INPUT_SHAPE
 from torch.utils.data import Dataset
 from torchvision import transforms
 from PIL import Image
-
-class NestedLatentWiderFaceDataset(Dataset):
-    """
-    Dataset for latent representations of Wider Face with nested directory structure.
-    
-    Args:
-        root_path (string): Path to dataset directory (e.g., 'train/latent')
-        label_file (string): Path to the label file (e.g., 'train/labels.txt')
-        latent_type (string): Type of latent file to use (e.g., 'latent_75.npy')
-        is_train (bool): Train dataset or test dataset
-    """
-    def __init__(self, root_path, label_file, latent_type='latent_75.npy', is_train=True):
-        self.root_path = root_path
-        self.label_file = label_file
-        self.latent_type = latent_type
-        self.is_train = is_train
-        
-        # Get all subdirectories (image folders)
-        self.image_dirs = [d for d in os.listdir(root_path) 
-                         if os.path.isdir(os.path.join(root_path, d))]
-        
-        # Parse labels
-        self.label_dict = self._parse_label_file(label_file)
-        
-        # Filter to only include directories that have the specified latent type
-        self.valid_dirs = []
-        for img_dir in self.image_dirs:
-            latent_path = os.path.join(root_path, img_dir, latent_type)
-            if os.path.exists(latent_path):
-                self.valid_dirs.append(img_dir)
-        
-        print(f"Found {len(self.valid_dirs)} valid directories with {latent_type}")
-    
-    def _parse_label_file(self, label_file):
-        """Parse the label file to match image directories with bounding boxes"""
-        label_dict = {}
-        
-        with open(label_file, 'r') as f:
-            lines = f.readlines()
-            
-            i = 0
-            while i < len(lines):
-                # Each image annotation starts with the image name
-                img_name = lines[i].strip()
-                i += 1
-                
-                # Get base name (without extension) to match directory name
-                base_name = os.path.splitext(os.path.basename(img_name))[0]
-                
-                # Next line has the number of faces
-                if i >= len(lines):
-                    break
-                    
-                try:
-                    face_count = int(lines[i].strip())
-                    i += 1
-                except ValueError:
-                    # If line is not a number, skip this entry
-                    continue
-                
-                # Skip images with no faces
-                if face_count == 0:
-                    # Skip the blank line that follows zero faces
-                    if i < len(lines):
-                        i += 1
-                    continue
-                
-                # Parse all face bounding boxes for this image
-                annotations = []
-                for j in range(face_count):
-                    if i >= len(lines):
-                        break
-                        
-                    try:
-                        values = lines[i].strip().split()
-                        i += 1
-                        
-                        # Check if we have sufficient values
-                        if len(values) < 4:
-                            continue
-                            
-                        # Get bounding box coordinates (x, y, w, h)
-                        x = float(values[0])
-                        y = float(values[1])
-                        w = float(values[2])
-                        h = float(values[3])
-                        
-                        # Convert to (x1, y1, x2, y2) format
-                        box = [x, y, x + w, y + h]
-                        
-                        # Add landmark if available (assuming 5 landmarks with (x,y) coordinates)
-                        landmarks = []
-                        landmarks_available = True
-                        
-                        if len(values) >= 14:  # 4 bbox + 10 landmark coordinates
-                            for k in range(4, 14, 2):
-                                lx = float(values[k])
-                                ly = float(values[k+1])
-                                if lx < 0 or ly < 0:
-                                    landmarks_available = False
-                                    break
-                                landmarks.extend([lx, ly])
-                        else:
-                            landmarks_available = False
-                            
-                        if not landmarks_available:
-                            landmarks = [-1.0] * 10  # Fill with -1 if landmarks not available
-                            
-                        # Combine box and landmarks
-                        annotation = box + landmarks + [1.0 if landmarks_available else -1.0]
-                        annotations.append(annotation)
-                        
-                    except (ValueError, IndexError) as e:
-                        # Skip malformed lines
-                        continue
-                
-                # Store annotations for this image
-                if annotations:
-                    label_dict[base_name] = np.array(annotations)
-        
-        return label_dict
-    
-    def __len__(self):
-        return len(self.valid_dirs)
-    
-    def __getitem__(self, index):
-        # Get the image directory
-        img_dir = self.valid_dirs[index]
-        
-        # Load the latent representation
-        latent_path = os.path.join(self.root_path, img_dir, self.latent_type)
-        latent = np.load(latent_path)
-        
-        # Ensure latent has proper dimensions [256, 40, 40]
-        if len(latent.shape) == 4 and latent.shape[0] == 1:  # If shape is [1, 256, 40, 40]
-            latent = latent.squeeze(0)  # Convert to [256, 40, 40]
-            
-        # Get annotations for this image
-        if img_dir in self.label_dict:
-            annotations = self.label_dict[img_dir]
-        else:
-            # If no annotations found, return empty annotation tensor
-            annotations = np.zeros((0, 15))
-            
-        # Convert latent to tensor
-        latent_tensor = torch.from_numpy(latent).float()
-        
-        return latent_tensor, annotations
-
-class LatentWiderFaceDataset(Dataset):
-    """
-    Dataset for latent representations of Wider Face.
-    
-    Args:
-        root_path (string): Path to dataset directory containing .npy latent files
-        label_file (string): Path to the WIDER FACE bounding box labels file
-        is_train (bool): Train dataset or test dataset
-    """
-    def __init__(self, root_path, label_file, is_train=True):
-        self.latent_path = root_path
-        self.label_file = label_file
-        self.is_train = is_train
-        
-        # Load all latent file paths
-        self.latent_files = [f for f in os.listdir(root_path) if f.endswith('.npy')]
-        self.label_dict = self._parse_label_file(label_file)
-        
-    def _parse_label_file(self, label_file):
-        """Parse the WIDER FACE label file to match latent files with bounding boxes"""
-        label_dict = {}
-        
-        with open(label_file, 'r') as f:
-            lines = f.readlines()
-            i = 0
-            while i < len(lines):
-                # Get image name
-                img_name = lines[i].strip()
-                i += 1
-                
-                # Get number of faces
-                face_count = int(lines[i].strip())
-                i += 1
-                
-                # Skip images with no faces
-                if face_count == 0:
-                    i += 1
-                    continue
-                    
-                # Parse all face bounding boxes for this image
-                annotations = []
-                for j in range(face_count):
-                    if i >= len(lines):
-                        break
-                        
-                    values = lines[i].strip().split()
-                    i += 1
-                    
-                    # Check if we have sufficient values
-                    if len(values) < 4:
-                        continue
-                        
-                    # Get bounding box coordinates (x, y, w, h)
-                    try:
-                        x = float(values[0])
-                        y = float(values[1])
-                        w = float(values[2])
-                        h = float(values[3])
-                        
-                        # Convert to (x1, y1, x2, y2) format
-                        box = [x, y, x + w, y + h]
-                        
-                        # Add landmark if available (assuming 5 landmarks with (x,y) coordinates)
-                        landmarks = []
-                        landmarks_available = True
-                        
-                        if len(values) >= 14:  # 4 bbox + 10 landmark coordinates
-                            for k in range(4, 14, 2):
-                                lx = float(values[k])
-                                ly = float(values[k+1])
-                                if lx < 0 or ly < 0:
-                                    landmarks_available = False
-                                    break
-                                landmarks.extend([lx, ly])
-                        else:
-                            landmarks_available = False
-                            
-                        if not landmarks_available:
-                            landmarks = [-1.0] * 10  # Fill with -1 if landmarks not available
-                            
-                        # Combine box and landmarks
-                        annotation = box + landmarks + [1.0 if landmarks_available else -1.0]
-                        annotations.append(annotation)
-                        
-                    except (ValueError, IndexError):
-                        # Skip malformed lines
-                        continue
-                
-                # Store annotations for this image
-                if annotations:
-                    # Extract base filename without extension
-                    base_name = os.path.splitext(os.path.basename(img_name))[0]
-                    label_dict[base_name] = np.array(annotations)
-                    
-        return label_dict
-    
-    def __len__(self):
-        return len(self.latent_files)
-    
-    def __getitem__(self, index):
-        # Get the latent file name
-        latent_file = self.latent_files[index]
-        base_name = os.path.splitext(latent_file)[0]
-        
-        # Load the latent representation [256, 40, 40]
-        latent = np.load(os.path.join(self.latent_path, latent_file))
-        
-        # Ensure latent has proper dimensions [256, 40, 40]
-        if len(latent.shape) == 4 and latent.shape[0] == 1:  # If shape is [1, 256, 40, 40]
-            latent = latent.squeeze(0)  # Convert to [256, 40, 40]
-            
-        # Get annotations for this image
-        if base_name in self.label_dict:
-            annotations = self.label_dict[base_name]
-        else:
-            # If no annotations found, return empty annotation tensor
-            annotations = np.zeros((0, 15))
-            
-        # Convert latent to tensor
-        latent_tensor = torch.from_numpy(latent).float()
-        
-        return latent_tensor, annotations
 
 class WiderFaceDataset(Dataset):
     """
@@ -354,6 +83,183 @@ class WiderFaceDataset(Dataset):
 
         return img, annotations
 
+class LatentWiderFaceDataset(Dataset):
+    """
+    Dataset class for using latent feature maps as input instead of RGB images.
+    Using a single labels.txt file for all images.
+    
+    Args:
+        root_path (string): Path to dataset directory containing latent features
+        latent_dir (string): Subdirectory containing the latent .npy files
+        label_file (string): Name of the labels file (default: 'labels.txt')
+        latent_suffix (string): Suffix for the specific latent file to use (e.g., 'latent_75.npy')
+        is_train (bool): Train dataset or test dataset
+    """
+    def __init__(self, root_path, latent_dir='latent', label_file='labels.txt', latent_suffix='latent_75.npy', is_train=True):
+        self.ids = []
+        self.latent_paths = []
+        self.annotations = []
+        self.is_train = is_train
+        self.latent_shape = LATENT_INPUT_SHAPE
+        self.latent_suffix = latent_suffix
+        
+        # Xác định đường dẫn đến train hoặc val
+        if is_train: 
+            self.path = os.path.join(root_path, 'train')
+        else: 
+            self.path = os.path.join(root_path, 'val')
+        
+        self.latent_path = os.path.join(self.path, latent_dir)
+        self.label_file_path = os.path.join(self.path, label_file)
+        
+        print(f"Đường dẫn thư mục latent: {self.latent_path}")
+        print(f"Đường dẫn file nhãn: {self.label_file_path}")
+        
+        # Kiểm tra thư mục và file có tồn tại không
+        if not os.path.exists(self.latent_path):
+            print(f"CẢNH BÁO: Thư mục latent {self.latent_path} không tồn tại!")
+            return
+            
+        if not os.path.exists(self.label_file_path):
+            print(f"CẢNH BÁO: File nhãn {self.label_file_path} không tồn tại!")
+            return
+            
+        # Đọc file nhãn
+        print("Đang đọc file nhãn...")
+        labels_data = {}
+        try:
+            with open(self.label_file_path, 'r') as f:
+                lines = f.readlines()
+                
+            i = 0
+            while i < len(lines):
+                # Dòng đầu tiên chứa tên ảnh
+                img_path = lines[i].strip()
+                # Trích xuất tên thư mục từ đường dẫn ảnh
+                img_name = img_path.split('/')[-1].replace('.jpg', '')
+                folder_name = img_path.split('/')[0]
+                image_dir = f"{folder_name}_{img_name}"
+                
+                i += 1
+                if i >= len(lines):
+                    break
+                    
+                # Dòng thứ hai chứa số lượng khuôn mặt
+                num_faces = int(lines[i].strip())
+                i += 1
+                
+                # Đọc thông tin về các khuôn mặt
+                face_annotations = []
+                for j in range(num_faces):
+                    if i >= len(lines):
+                        break
+                    face_data = lines[i].strip().split()
+                    face_data = [float(x) for x in face_data]
+                    face_annotations.append(face_data)
+                    i += 1
+                
+                labels_data[image_dir] = face_annotations
+            
+            print(f"Đã đọc thông tin nhãn cho {len(labels_data)} hình ảnh.")
+        except Exception as e:
+            print(f"Lỗi khi đọc file nhãn: {e}")
+            return
+        
+        # Tìm các file latent
+        print("Đang tìm các file latent...")
+        for image_dir in os.listdir(self.latent_path):
+            image_dir_path = os.path.join(self.latent_path, image_dir)
+            if os.path.isdir(image_dir_path):
+                latent_file_path = os.path.join(image_dir_path, self.latent_suffix)
+                if os.path.isfile(latent_file_path):
+                    if image_dir in labels_data:
+                        self.ids.append(image_dir)
+                        self.latent_paths.append(latent_file_path)
+                        self.annotations.append(labels_data[image_dir])
+                    else:
+                        # Thử tìm các định dạng tên khác có thể phù hợp
+                        matched = False
+                        for label_key in labels_data.keys():
+                            if image_dir in label_key or label_key in image_dir:
+                                self.ids.append(image_dir)
+                                self.latent_paths.append(latent_file_path)
+                                self.annotations.append(labels_data[label_key])
+                                matched = True
+                                print(f"Đã khớp {image_dir} với nhãn {label_key}")
+                                break
+                        if not matched:
+                            print(f"Cảnh báo: Không tìm thấy nhãn cho {image_dir}")
+        
+        print(f"Đã tìm thấy {len(self.ids)} cặp file latent và nhãn hợp lệ.")
+        
+        if len(self.ids) == 0:
+            print("CẢNH BÁO: Không tìm thấy dữ liệu hợp lệ!")
+            # In một số ví dụ để giúp chẩn đoán
+            try:
+                print(f"Nội dung của {self.latent_path}: {os.listdir(self.latent_path)[:5]}")
+                first_dir = os.listdir(self.latent_path)[0]
+                print(f"Nội dung của {os.path.join(self.latent_path, first_dir)}: {os.listdir(os.path.join(self.latent_path, first_dir))[:5]}")
+                print(f"Các khóa nhãn: {list(labels_data.keys())[:5]}")
+            except Exception as e:
+                print(f"Lỗi khi liệt kê file: {e}")
+    
+    def __len__(self):
+        return len(self.ids)
+    
+    def __getitem__(self, index):
+        try:
+            # Tải biểu diễn latent
+            latent_file = self.latent_paths[index]
+            latent = np.load(latent_file)
+            
+            # Chuyển đổi sang tensor và đảm bảo kích thước chính xác
+            latent = torch.from_numpy(latent).float()
+            
+            # Nếu latent có shape [1, C, H, W], loại bỏ chiều batch
+            if len(latent.shape) == 4 and latent.shape[0] == 1:
+                latent = latent.squeeze(0)
+            
+            # Lấy annotations từ danh sách đã đọc trước
+            face_annotations = self.annotations[index]
+            
+            # Tạo tensor annotations theo định dạng mong muốn
+            annotations = np.zeros((len(face_annotations), 15))
+            
+            for idx, line in enumerate(face_annotations):
+                if len(line) < 4:  # Kiểm tra xem có đủ thông tin không
+                    continue
+                
+                # bbox
+                annotations[idx, 0] = line[0]               # x1
+                annotations[idx, 1] = line[1]               # y1
+                annotations[idx, 2] = line[0] + line[2]     # x2
+                annotations[idx, 3] = line[1] + line[3]     # y2
+                
+                if len(line) > 4:  # Nếu có thông tin về landmarks
+                    # landmarks - chuyển đổi từ định dạng [x, y, vis] * 5 sang định dạng mong muốn
+                    lm_idx = 4
+                    for i in range(5):  # 5 điểm landmark
+                        if lm_idx + i*3 + 1 < len(line):
+                            annotations[idx, 4 + i*2] = line[lm_idx + i*3]     # landmark x
+                            annotations[idx, 5 + i*2] = line[lm_idx + i*3 + 1]  # landmark y
+                
+                # Set landmark visibility flag
+                if annotations[idx, 4] < 0:
+                    annotations[idx, 14] = -1
+                else:
+                    annotations[idx, 14] = 1
+            
+            # Chuyển đổi annotations sang tensor
+            annotations_tensor = torch.from_numpy(annotations).float()
+            return latent, annotations_tensor
+            
+        except Exception as e:
+            print(f"Lỗi khi xử lý mẫu {self.ids[index]}: {e}")
+            # Trả về mẫu trống trong trường hợp lỗi
+            empty_latent = torch.zeros(self.latent_shape)
+            empty_annotations = torch.zeros((0, 15))
+            return empty_latent, empty_annotations
+
 def log_dataset(use_artifact, 
         artifact_name, 
         artifact_path, dataset_name, 
@@ -385,8 +291,11 @@ def detection_collate(batch):
     imgs = []
 
     for _, (image, target) in enumerate(batch):
-        image  = torch.from_numpy(image)
-        target = torch.from_numpy(target).to(dtype=torch.float)
+        if not isinstance(image, torch.Tensor):
+            image = torch.from_numpy(image)
+        
+        if not isinstance(target, torch.Tensor):
+            target = torch.from_numpy(target).to(dtype=torch.float)
 
         imgs.append(image)
         targets.append(target)
