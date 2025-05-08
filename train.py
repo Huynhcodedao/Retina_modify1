@@ -73,7 +73,7 @@ def train(model, anchors, trainloader, optimizer, loss_function, device='cpu'):
 
     return loss_cls, loss_box, loss_pts
 
-def evaluate(model, anchors, validloader, loss_function, best_box, device='cpu'):
+def evaluate(model, anchors, validloader, loss_function, best_box, device='cpu', save_dir='./exp1'):
     model.eval()
     loss_cls, loss_box, loss_pts = 0, 0, 0
     count_img, count_target = 0, 0
@@ -112,9 +112,13 @@ def evaluate(model, anchors, validloader, loss_function, best_box, device='cpu')
 
     epoch_summary = [count_img, count_target, epoch_ap_5, epoch_ap_5_95]
 
-    if loss_box>best_box:
-    # export to onnx + pt
-        torch.save(model.state_dict(), os.path.join(save_dir, 'weight.pth'))
+    # Mỗi lần val loss được cải thiện, lưu lại trọng số
+    if loss_box < best_box:
+        # Đảm bảo thư mục tồn tại
+        os.makedirs(save_dir, exist_ok=True)
+        weight_path = os.path.join(save_dir, 'weight.pth')
+        torch.save(model.state_dict(), weight_path)
+        print(f"  Improved validation loss! Saved weights to {weight_path}")
 
     return loss_cls, loss_box, loss_pts, epoch_summary
 
@@ -306,33 +310,12 @@ if __name__ == '__main__':
             print(f"Model output dimensions: {outputs[0].shape}")
             print(f"Expected anchors: {num_predictions}")
             
-            # Create standard anchors first
-            standard_anchors = Anchors(
-                pyramid_levels=model.feature_map
-            ).forward().to(device)
+            # Create anchors using the exact count method
+            anchor_generator = Anchors(pyramid_levels=model.feature_map)
+            anchors = anchor_generator.create_exact_anchors(num_predictions).to(device)
             
-            print(f"Generated {standard_anchors.size(0)} anchors, need {num_predictions}")
+            print(f"Created exactly {anchors.size(0)} anchors to match required count")
             
-            # Handle case where we need more anchors
-            if standard_anchors.size(0) < num_predictions:
-                print(f"Need to augment anchors from {standard_anchors.size(0)} to {num_predictions}")
-                
-                # Duplicate anchors to match required count
-                missing_anchors = num_predictions - standard_anchors.size(0)
-                print(f"Creating {missing_anchors} additional anchors")
-                
-                # Clone some existing anchors to make up the difference
-                multiplier = (num_predictions + standard_anchors.size(0) - 1) // standard_anchors.size(0)
-                augmented_anchors = standard_anchors.repeat(multiplier, 1)
-                anchors = augmented_anchors[:num_predictions]
-                
-                print(f"Created anchors of size {anchors.size(0)}")
-            # Truncate if we have too many
-            elif standard_anchors.size(0) > num_predictions:
-                print(f"Truncating anchors from {standard_anchors.size(0)} to {num_predictions}")
-                anchors = standard_anchors[:num_predictions]
-            else:
-                anchors = standard_anchors
         else:
             # Original anchor generation for RGB mode
             anchors = Anchors(pyramid_levels=model.feature_map).forward().to(device)
@@ -354,7 +337,7 @@ if __name__ == '__main__':
     run.watch(models=model, criterion=criterion, log='all', log_freq=10)
 
     # training
-    best_ap = -1
+    best_box = float('inf')  # Khởi tạo với giá trị vô cùng để đảm bảo lần đầu tiên luôn lưu
 
     for epoch in range(epochs):
         print(f'\n\tEpoch\tbox\t\tlandmarks\tcls\t\ttotal')
@@ -369,8 +352,13 @@ if __name__ == '__main__':
         
         # summary [count_img, count_target, epoch_ap_5, epoch_ap_5_95]
         t0 = time.time()
-        loss_cls, loss_box, loss_pts, summary = evaluate(model, anchors, validloader, criterion, loss_box, device)
+        loss_cls, loss_box, loss_pts, summary = evaluate(model, anchors, validloader, criterion, best_box, device, save_dir)
         t1 = time.time()
+        
+        # Cập nhật best_box nếu val loss cải thiện
+        if loss_box < best_box:
+            best_box = loss_box
+            print(f"  New best validation box loss: {best_box:.5f}")
 
         # images, labels, P, R, map_5, map_95
         print(f'\n\tImages\tLabels\t\tbox\t\tlandmarks\tcls\t\tmAP@.5\t\tmAP.5.95')
@@ -384,13 +372,24 @@ if __name__ == '__main__':
         # decrease lr
         scheduler.step()
 
-        # Wandb summary
-        # if summary[2] > best_ap:
-        #     best_ap = summary[2] 
-        #     wandb.run.summary["best_accuracy"] = best_ap
+    # Save weights
+    print(f"\nSaving model weights...")
+    # Ensure the save directory exists
+    os.makedirs(save_dir, exist_ok=True)
+    weight_path = os.path.join(save_dir, 'weight.pth')
+    torch.save(model.state_dict(), weight_path)
+    print(f"Saved weights to {weight_path}")
 
     if not args.tuning:
-        trained_weight = wandb.Artifact(args.run, type='WEIGHTS')
-        # trained_weight.add_file(os.path.join(save_dir, 'weight.onnx'))
-        trained_weight.add_file(os.path.join(save_dir, 'weight.pth'))
-        wandb.log_artifact(trained_weight)
+        try:
+            trained_weight = wandb.Artifact(args.run, type='WEIGHTS')
+            # Check if the weight file exists before attempting to add it
+            if os.path.exists(weight_path):
+                trained_weight.add_file(weight_path)
+                wandb.log_artifact(trained_weight)
+                print(f"Successfully uploaded weights to wandb")
+            else:
+                print(f"WARNING: Weight file not found at {weight_path}. Skipping wandb artifact upload.")
+        except Exception as e:
+            print(f"Error uploading weights to wandb: {e}")
+            print("Training completed successfully, but weights were not uploaded to wandb.")

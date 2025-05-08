@@ -56,7 +56,17 @@ class Anchors(nn.Module):
             print(f"  Level shape {shape}: {locations} positions × {len(self.ratios) * len(self.scales)} anchors = {anchors_per_level} anchors")
         print(f"Anchors: Total expected anchors: {total_expected}")
         
-    def forward(self):
+    def forward(self, target_count=None):
+        """
+        Generate anchors for all pyramid levels.
+        
+        Args:
+            target_count (int, optional): If provided, will ensure exactly 
+                this many anchors are returned by replicating or truncating.
+        
+        Returns:
+            torch.Tensor: Generated anchors in normalized coordinates
+        """
         # compute anchors over all pyramid levels
         all_anchors = np.zeros((0, 4)).astype(np.float32)
         
@@ -104,7 +114,39 @@ class Anchors(nn.Module):
         # Print debug info about anchors
         print(f"Total generated anchors: {all_anchors.size(0)} (expected {total_anchors})")
         
+        # Handle specific target count if provided
+        if target_count is not None and all_anchors.size(0) != target_count:
+            print(f"Adjusting anchor count from {all_anchors.size(0)} to exact target of {target_count}")
+            
+            # If we need more anchors than we have
+            if all_anchors.size(0) < target_count:
+                # Duplicate existing anchors to reach target count
+                repetitions_needed = int(np.ceil(target_count / all_anchors.size(0)))
+                expanded_anchors = all_anchors.repeat(repetitions_needed, 1)
+                # Truncate to exactly the number needed
+                adjusted_anchors = expanded_anchors[:target_count]
+                print(f"Expanded {all_anchors.size(0)} anchors to {adjusted_anchors.size(0)} by duplication")
+                return adjusted_anchors
+            else:
+                # Truncate anchors to target count
+                adjusted_anchors = all_anchors[:target_count]
+                print(f"Truncated {all_anchors.size(0)} anchors to {adjusted_anchors.size(0)}")
+                return adjusted_anchors
+        
         return all_anchors
+    
+    def create_exact_anchors(self, target_count):
+        """
+        Create exactly the specified number of anchors by generating 
+        standard anchors and then adjusting count as needed.
+        
+        Args:
+            target_count (int): Exact number of anchors to generate
+            
+        Returns:
+            torch.Tensor: Exactly target_count anchors
+        """
+        return self.forward(target_count=target_count)
 
 def generate_anchors(num_anchors=None, base_size=8, ratios=None, scales=None):
     """

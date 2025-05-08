@@ -155,10 +155,26 @@ class LatentWiderFaceDataset(Dataset):
                         break
                     face_data = lines[i].strip().split()
                     face_data = [float(x) for x in face_data]
-                    face_annotations.append(face_data)
+                    
+                    # Validate the face data to ensure it's valid
+                    if len(face_data) >= 4:  # Ensure we have at least x, y, w, h
+                        # Ensure width and height are positive
+                        if face_data[2] <= 0:
+                            face_data[2] = 1.0  # Default width
+                        if face_data[3] <= 0:
+                            face_data[3] = 1.0  # Default height
+                        
+                        # Add this face to annotations
+                        face_annotations.append(face_data)
+                    else:
+                        print(f"Skipping invalid face data: {face_data}")
+                    
                     i += 1
                 
-                labels_data[image_dir] = face_annotations
+                if len(face_annotations) > 0:
+                    labels_data[image_dir] = face_annotations
+                else:
+                    print(f"Warning: No valid faces found for {image_dir}")
             
             print(f"Đã đọc thông tin nhãn cho {len(labels_data)} hình ảnh.")
         except Exception as e:
@@ -198,67 +214,109 @@ class LatentWiderFaceDataset(Dataset):
             try:
                 print(f"Nội dung của {self.latent_path}: {os.listdir(self.latent_path)[:5]}")
                 first_dir = os.listdir(self.latent_path)[0]
-                print(f"Nội dung của {os.path.join(self.latent_path, first_dir)}: {os.listdir(os.path.join(self.latent_path, first_dir))[:5]}")
-                print(f"Các khóa nhãn: {list(labels_data.keys())[:5]}")
+                first_dir_path = os.path.join(self.latent_path, first_dir)
+                if os.path.isdir(first_dir_path):
+                    print(f"Nội dung của {first_dir_path}: {os.listdir(first_dir_path)[:5]}")
             except Exception as e:
-                print(f"Lỗi khi liệt kê file: {e}")
-    
+                print(f"Lỗi khi in thông tin chẩn đoán: {e}")
+        else:
+            # Validate a sample of the annotations to ensure they're in the right format
+            sample_idx = min(len(self.annotations) - 1, 5)  # Check the 5th item or last if fewer
+            sample_annot = self.annotations[sample_idx]
+            print(f"Example annotation for item {sample_idx}: {sample_annot[0] if len(sample_annot) > 0 else 'empty'}")
+
     def __len__(self):
         return len(self.ids)
-    
+
     def __getitem__(self, index):
         try:
-            # Tải biểu diễn latent
+            # Load the latent representation
             latent_file = self.latent_paths[index]
-            latent = np.load(latent_file)
+            latent_data = np.load(latent_file)
             
-            # Chuyển đổi sang tensor và đảm bảo kích thước chính xác
-            latent = torch.from_numpy(latent).float()
+            # Convert latent data to tensor and ensure it's the right shape
+            latent_tensor = torch.from_numpy(latent_data).float()
             
-            # Nếu latent có shape [1, C, H, W], loại bỏ chiều batch
-            if len(latent.shape) == 4 and latent.shape[0] == 1:
-                latent = latent.squeeze(0)
+            # Ensure the tensor has the correct dimensions
+            if len(latent_tensor.shape) == 3:  # Missing batch dimension
+                latent_tensor = latent_tensor.unsqueeze(0)
             
-            # Lấy annotations từ danh sách đã đọc trước
-            face_annotations = self.annotations[index]
+            if latent_tensor.shape[0] != 1:
+                print(f"Warning: Unexpected batch dimension in latent tensor: {latent_tensor.shape}")
             
-            # Tạo tensor annotations theo định dạng mong muốn
-            annotations = np.zeros((len(face_annotations), 15))
+            # Trim to the expected shape (1, 256, 40, 40) and remove batch dimension
+            if latent_tensor.shape != self.latent_shape:
+                print(f"Warning: Resizing latent tensor from {latent_tensor.shape} to {self.latent_shape}")
+                # Resize to match expected shape
+                latent_tensor = torch.nn.functional.interpolate(
+                    latent_tensor, 
+                    size=(self.latent_shape[2], self.latent_shape[3]),
+                    mode='bilinear'
+                )
             
-            for idx, line in enumerate(face_annotations):
-                if len(line) < 4:  # Kiểm tra xem có đủ thông tin không
-                    continue
+            # Extract the latent features (remove batch dimension)
+            latent_features = latent_tensor.squeeze(0)
+            
+            # Process annotations
+            annots = self.annotations[index]
+            annotations = np.zeros((len(annots), 15))
+            
+            if len(annots) == 0:
+                # For empty annotations, return a dummy target
+                dummy_target = np.zeros((1, 15))
+                dummy_target[0, 14] = -1  # Mark as invalid
+                return latent_features, dummy_target
+            
+            for idx, face_data in enumerate(annots):
+                # Format the data to match the expected output format
                 
-                # bbox
-                annotations[idx, 0] = line[0]               # x1
-                annotations[idx, 1] = line[1]               # y1
-                annotations[idx, 2] = line[0] + line[2]     # x2
-                annotations[idx, 3] = line[1] + line[3]     # y2
-                
-                if len(line) > 4:  # Nếu có thông tin về landmarks
-                    # landmarks - chuyển đổi từ định dạng [x, y, vis] * 5 sang định dạng mong muốn
-                    lm_idx = 4
-                    for i in range(5):  # 5 điểm landmark
-                        if lm_idx + i*3 + 1 < len(line):
-                            annotations[idx, 4 + i*2] = line[lm_idx + i*3]     # landmark x
-                            annotations[idx, 5 + i*2] = line[lm_idx + i*3 + 1]  # landmark y
-                
-                # Set landmark visibility flag
-                if annotations[idx, 4] < 0:
-                    annotations[idx, 14] = -1
+                # bbox: Convert from x,y,w,h to x1,y1,x2,y2
+                if len(face_data) >= 4:
+                    annotations[idx, 0] = face_data[0]                   # x1
+                    annotations[idx, 1] = face_data[1]                   # y1
+                    annotations[idx, 2] = face_data[0] + face_data[2]    # x2
+                    annotations[idx, 3] = face_data[1] + face_data[3]    # y2
                 else:
+                    print(f"Warning: Invalid bbox data for {self.ids[index]}, face {idx}")
+                
+                # landmarks: 5 points with x,y coordinates (10 values)
+                # If there are landmarks in the data (expected len >= 14)
+                if len(face_data) >= 14:
+                    # Process the 5 landmarks (10 values)
+                    annotations[idx, 4] = face_data[4]    # l0_x
+                    annotations[idx, 5] = face_data[5]    # l0_y
+                    annotations[idx, 6] = face_data[6]    # l1_x
+                    annotations[idx, 7] = face_data[7]    # l1_y
+                    annotations[idx, 8] = face_data[8]    # l2_x
+                    annotations[idx, 9] = face_data[9]    # l2_y
+                    annotations[idx, 10] = face_data[10]  # l3_x
+                    annotations[idx, 11] = face_data[11]  # l3_y
+                    annotations[idx, 12] = face_data[12]  # l4_x
+                    annotations[idx, 13] = face_data[13]  # l4_y
+                    
+                    # Set landmark valid flag (1 = valid)
                     annotations[idx, 14] = 1
+                else:
+                    # If we don't have landmark data, mark landmarks as invalid
+                    annotations[idx, 14] = -1
             
-            # Chuyển đổi annotations sang tensor
-            annotations_tensor = torch.from_numpy(annotations).float()
-            return latent, annotations_tensor
+            # Validate boxes have proper dimensions
+            for i in range(len(annotations)):
+                # Ensure width and height are at least 1 pixel
+                if annotations[i, 2] <= annotations[i, 0]:
+                    annotations[i, 2] = annotations[i, 0] + 1
+                if annotations[i, 3] <= annotations[i, 1]:
+                    annotations[i, 3] = annotations[i, 1] + 1
+            
+            return latent_features, annotations
             
         except Exception as e:
-            print(f"Lỗi khi xử lý mẫu {self.ids[index]}: {e}")
-            # Trả về mẫu trống trong trường hợp lỗi
-            empty_latent = torch.zeros(self.latent_shape)
-            empty_annotations = torch.zeros((0, 15))
-            return empty_latent, empty_annotations
+            print(f"Error loading item {index} ({self.ids[index]}): {e}")
+            # Return a dummy tensor and target as fallback
+            dummy_tensor = torch.zeros(self.latent_shape[1:])
+            dummy_target = np.zeros((1, 15))
+            dummy_target[0, 14] = -1  # Mark as invalid
+            return dummy_tensor, dummy_target
 
 def log_dataset(use_artifact, 
         artifact_name, 
