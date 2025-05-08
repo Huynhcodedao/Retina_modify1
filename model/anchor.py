@@ -44,10 +44,23 @@ class Anchors(nn.Module):
         print(f"Anchors: Using pyramid levels: {self.pyramid_levels}")
         print(f"Anchors: Image size: {self.image_size}")
         print(f"Anchors: Feature shapes: {self.feat_shape}")
+        print(f"Anchors: Ratios: {self.ratios}, Scales: {len(self.scales)}")
+        print(f"Anchors: Total anchors per position: {len(self.ratios) * len(self.scales)}")
+        
+        # Tính số lượng anchors dự kiến
+        total_expected = 0
+        for shape in self.feat_shape:
+            locations = shape[0] * shape[1]
+            anchors_per_level = locations * len(self.ratios) * len(self.scales)
+            total_expected += anchors_per_level
+            print(f"  Level shape {shape}: {locations} positions × {len(self.ratios) * len(self.scales)} anchors = {anchors_per_level} anchors")
+        print(f"Anchors: Total expected anchors: {total_expected}")
         
     def forward(self):
         # compute anchors over all pyramid levels
         all_anchors = np.zeros((0, 4)).astype(np.float32)
+        
+        total_anchors = 0
 
         for idx, p in enumerate(self.pyramid_levels):
             if idx >= len(self.feat_shape):
@@ -61,6 +74,11 @@ class Anchors(nn.Module):
                     # Shouldn't happen, but just in case
                     self.feat_shape.append(self.image_size // self.strides[idx])
             
+            # Calculate number of anchors for this level
+            num_anchors_base = len(self.ratios) * len(self.scales)
+            num_positions = self.feat_shape[idx][0] * self.feat_shape[idx][1]
+            expected_anchors = num_positions * num_anchors_base
+            
             anchors = generate_anchors(base_size=self.sizes[idx], ratios=self.ratios, scales=self.scales)
             anchors = torch.from_numpy(anchors).to(dtype=torch.float)
             
@@ -69,7 +87,14 @@ class Anchors(nn.Module):
                 # Normalize coordinates
                 shifted_anchors[:, 0::2] = shifted_anchors[:, 0::2]/self.image_size[0]
                 shifted_anchors[:, 1::2] = shifted_anchors[:, 1::2]/self.image_size[1]
+                
+                # Kiểm tra số lượng anchors có đúng với dự kiến không
+                actual_anchors = shifted_anchors.shape[0]
+                if actual_anchors != expected_anchors:
+                    print(f"WARNING: Level {p} expected {expected_anchors} anchors but got {actual_anchors}")
+                    
                 all_anchors = np.append(all_anchors, shifted_anchors, axis=0)
+                total_anchors += actual_anchors
                 print(f"Generated {shifted_anchors.shape[0]} anchors for level {p} with stride {self.strides[idx]} and size {self.sizes[idx]}")
             except Exception as e:
                 print(f"Error generating anchors for level {p}: {e}")
@@ -77,7 +102,7 @@ class Anchors(nn.Module):
         all_anchors = torch.from_numpy(all_anchors).to(dtype=torch.float)
         
         # Print debug info about anchors
-        print(f"Total generated anchors: {all_anchors.size(0)}")
+        print(f"Total generated anchors: {all_anchors.size(0)} (expected {total_anchors})")
         
         return all_anchors
 

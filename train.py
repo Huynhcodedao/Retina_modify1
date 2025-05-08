@@ -311,13 +311,27 @@ if __name__ == '__main__':
                 pyramid_levels=model.feature_map
             ).forward().to(device)
             
-            # Check if we need to truncate
-            if standard_anchors.size(0) > num_predictions:
+            print(f"Generated {standard_anchors.size(0)} anchors, need {num_predictions}")
+            
+            # Handle case where we need more anchors
+            if standard_anchors.size(0) < num_predictions:
+                print(f"Need to augment anchors from {standard_anchors.size(0)} to {num_predictions}")
+                
+                # Duplicate anchors to match required count
+                missing_anchors = num_predictions - standard_anchors.size(0)
+                print(f"Creating {missing_anchors} additional anchors")
+                
+                # Clone some existing anchors to make up the difference
+                multiplier = (num_predictions + standard_anchors.size(0) - 1) // standard_anchors.size(0)
+                augmented_anchors = standard_anchors.repeat(multiplier, 1)
+                anchors = augmented_anchors[:num_predictions]
+                
+                print(f"Created anchors of size {anchors.size(0)}")
+            # Truncate if we have too many
+            elif standard_anchors.size(0) > num_predictions:
                 print(f"Truncating anchors from {standard_anchors.size(0)} to {num_predictions}")
                 anchors = standard_anchors[:num_predictions]
             else:
-                # In the rare case where we have too few anchors
-                print(f"WARNING: Too few anchors ({standard_anchors.size(0)}), expected {num_predictions}")
                 anchors = standard_anchors
         else:
             # Original anchor generation for RGB mode

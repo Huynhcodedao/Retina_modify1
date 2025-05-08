@@ -281,6 +281,17 @@ class RetinaFace(nn.Module):
             while len(features) < expected_features:
                 features.append(features[-1])
 
+        # Calculate number of anchors for each feature map
+        # For [80x80, 80x80, 40x40, 20x20, 20x20, 10x10] with 6 anchors per location
+        # we get [(80*80 + 80*80 + 40*40 + 20*20 + 20*20 + 10*10) * 6] = 91,800 anchors
+        expected_anchors = 0
+        for feature in features:
+            h, w = feature.shape[2], feature.shape[3]
+            expected_anchors += h * w * 6  # 6 anchors per location
+            
+        if self.debug:
+            print(f"Expected total anchors: {expected_anchors}")
+        
         # Apply heads to each feature
         bbox_outputs = []
         class_outputs = []
