@@ -137,9 +137,15 @@ class LatentWiderFaceDataset(Dataset):
                 img_path = lines[i].strip()
                 # Trích xuất tên thư mục từ đường dẫn ảnh
                 img_name = img_path.split('/')[-1].replace('.jpg', '')
-                folder_name = img_path.split('/')[0]
-                image_dir = f"{folder_name}_{img_name}"
                 
+                # Handle case when path doesn't contain directories
+                if '/' in img_path:
+                    folder_name = img_path.split('/')[0]
+                    image_dir = f"{folder_name}_{img_name}"
+                else:
+                    # If no directory in path, use only the filename
+                    image_dir = img_name
+                    
                 i += 1
                 if i >= len(lines):
                     break
@@ -244,18 +250,50 @@ class LatentWiderFaceDataset(Dataset):
             if latent_tensor.shape[0] != 1:
                 print(f"Warning: Unexpected batch dimension in latent tensor: {latent_tensor.shape}")
             
-            # Trim to the expected shape (1, 256, 40, 40) and remove batch dimension
-            if latent_tensor.shape != self.latent_shape:
-                print(f"Warning: Resizing latent tensor from {latent_tensor.shape} to {self.latent_shape}")
-                # Resize to match expected shape
-                latent_tensor = torch.nn.functional.interpolate(
-                    latent_tensor, 
-                    size=(self.latent_shape[2], self.latent_shape[3]),
-                    mode='bilinear'
-                )
+            # Extract the latent features (remove batch dimension) if needed
+            if latent_tensor.shape[0] == 1:
+                latent_features = latent_tensor.squeeze(0)
+            else:
+                latent_features = latent_tensor
+                
+            # Ensure the channel dimension is correct (should be 256)
+            if latent_features.shape[0] != 256:
+                print(f"Warning: Unexpected channel dimension: {latent_features.shape}. Reshaping to match 256 channels.")
+                
+                # If tensor is [C, H, W] with C != 256
+                if len(latent_features.shape) == 3:
+                    # Handle the case where channel dimension is wrong
+                    if latent_features.shape[0] < 256:
+                        # Duplicate existing channels to get to 256
+                        repeat_factor = int(np.ceil(256 / latent_features.shape[0]))
+                        expanded = latent_features.repeat(repeat_factor, 1, 1)
+                        latent_features = expanded[:256]
+                    else:
+                        # Truncate to 256 channels
+                        latent_features = latent_features[:256]
+                
+                # If tensor is [H, W] (missing channel dim)
+                elif len(latent_features.shape) == 2:
+                    # Treat the single channel as 256 by duplicating it
+                    h, w = latent_features.shape
+                    latent_features = latent_features.unsqueeze(0).repeat(256, 1, 1)
+                    print(f"Expanded 2D tensor of shape [{h}, {w}] to [256, {h}, {w}]")
             
-            # Extract the latent features (remove batch dimension)
-            latent_features = latent_tensor.squeeze(0)
+            # Ensure the tensor has spatial dimensions of 40x40
+            if latent_features.shape[1] != 40 or latent_features.shape[2] != 40:
+                print(f"Resizing latent spatial dimensions from {latent_features.shape[1]}x{latent_features.shape[2]} to 40x40")
+                # Resize to match expected spatial dimensions
+                latent_features = torch.nn.functional.interpolate(
+                    latent_features.unsqueeze(0),  # Add batch dim for interpolation
+                    size=(40, 40),
+                    mode='bilinear'
+                ).squeeze(0)  # Remove batch dim
+            
+            # Verify final shape
+            if latent_features.shape != (256, 40, 40):
+                print(f"ERROR: Final tensor shape {latent_features.shape} doesn't match required (256, 40, 40)")
+                # Final fallback: create a zero tensor with correct shape
+                latent_features = torch.zeros((256, 40, 40))
             
             # Process annotations
             annots = self.annotations[index]
@@ -313,7 +351,7 @@ class LatentWiderFaceDataset(Dataset):
         except Exception as e:
             print(f"Error loading item {index} ({self.ids[index]}): {e}")
             # Return a dummy tensor and target as fallback
-            dummy_tensor = torch.zeros(self.latent_shape[1:])
+            dummy_tensor = torch.zeros((256, 40, 40))
             dummy_target = np.zeros((1, 15))
             dummy_target[0, 14] = -1  # Mark as invalid
             return dummy_tensor, dummy_target

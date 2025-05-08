@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from math import sqrt, pow
 import torch.nn.functional as F
+import numpy as np
 
 from model.config import *
 from model._utils import IntermediateLayerGetter
@@ -10,7 +11,7 @@ from model.common import FPN, SSH, MobileNetV1
 class BridgeModule(nn.Module):
     def __init__(self, in_channels=256, out_channels=256):
         """
-        Bridge module to transform latent representation [1, 256, 40, 40] to [256, 160, 160]
+        Bridge module to transform latent representation [batch_size, 256, 40, 40] to [batch_size, 256, 160, 160]
         to match the expected input size for stage 2 of ResNet50
         """
         super(BridgeModule, self).__init__()
@@ -29,8 +30,25 @@ class BridgeModule(nn.Module):
         self.relu3 = nn.ReLU(inplace=True)
         
     def forward(self, x):
-        # Print để debug kích thước đầu vào
-        # print(f"Bridge input shape: {x.shape}")
+        # Debug input shape
+        if hasattr(self, 'debug') and self.debug:
+            print(f"Bridge input shape: {x.shape}")
+        
+        # Ensure input has the correct number of channels
+        if x.dim() == 3:  # If missing batch dimension
+            x = x.unsqueeze(0)
+            print(f"Added missing batch dimension: {x.shape}")
+        
+        if x.size(1) != 256:
+            print(f"ERROR: Expected 256 channels in input, got {x.size(1)}. Reshaping...")
+            if x.size(1) < 256:
+                # Duplicate channels to get 256
+                repeat_factor = int(np.ceil(256 / x.size(1)))
+                x_expanded = x.repeat(1, repeat_factor, 1, 1)
+                x = x_expanded[:, :256, :, :]
+            else:
+                # Truncate channels to 256
+                x = x[:, :256, :, :]
         
         x = self.conv1(x)
         x = self.bn1(x)
@@ -44,10 +62,14 @@ class BridgeModule(nn.Module):
         x = self.bn3(x)
         x = self.relu3(x)
         
-        # Print để debug kích thước đầu ra
-        # print(f"Bridge output shape: {x.shape}")
+        # Debug output shape
+        if hasattr(self, 'debug') and self.debug:
+            print(f"Bridge output shape: {x.shape}")
         
         return x
+    
+    def set_debug(self, debug=True):
+        self.debug = debug
 
 class ClassHead(nn.Module):
     def __init__(self, in_channels, num_anchors=3):
@@ -149,6 +171,10 @@ class RetinaFace(nn.Module):
             # For latent input, we'll use a custom Bridge module and modified backbone
             self.bridge = BridgeModule(in_channels=256, out_channels=256)
             
+            # Set debug mode if needed
+            if self.debug:
+                self.bridge.set_debug(True)
+            
             # We need to modify the return_feature to skip the first two stages (stage 0 and stage 1)
             # of ResNet50 and only use stages 2, 3, and 4
             modified_return_feature = {'layer2': 'out_feature2', 
@@ -233,6 +259,23 @@ class RetinaFace(nn.Module):
             print(f"Input shape: {input.shape}")
             
         if self.use_latent:
+            # Handle input shape issues
+            if len(input.shape) == 3:  # Missing batch dimension
+                input = input.unsqueeze(0)
+                print(f"Added missing batch dimension: {input.shape}")
+                
+            # Ensure we have 256 channels
+            if input.size(1) != 256:
+                print(f"WARNING: Expected 256 input channels but got {input.size(1)}")
+                if input.size(1) < 256:
+                    # If we have fewer channels than needed, duplicate them
+                    multiplier = (256 + input.size(1) - 1) // input.size(1)
+                    expanded_input = input.repeat(1, multiplier, 1, 1)
+                    input = expanded_input[:, :256]
+                else:
+                    # If we have more channels than needed, truncate
+                    input = input[:, :256]
+                
             # For latent input, first pass through bridge module to match expected size
             x = self.bridge(input)
             

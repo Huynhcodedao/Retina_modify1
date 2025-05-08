@@ -304,6 +304,8 @@ if __name__ == '__main__':
             # Custom anchor generation for latent mode
             
             # Run a forward pass to get output dimensions
+            # Create a properly shaped dummy input
+            print(f"Creating dummy input with shape [1, 256, 40, 40]")
             dummy_input = torch.zeros((1, 256, 40, 40)).to(device)
             outputs = model(dummy_input)
             num_predictions = outputs[0].shape[1]
