@@ -290,8 +290,14 @@ if __name__ == '__main__':
 
     cudnn.benchmark = True
 
+    print("\nGenerating anchors...")
+    print(f"Model feature_map configuration: {model.feature_map}")
+    print(f"Using latent mode: {args.use_latent or USE_LATENT}")
+    
     with torch.no_grad():
         anchors = Anchors(pyramid_levels=model.feature_map).forward().to(device)
+        
+    print(f"Generated {anchors.size(0)} anchors\n")
 
     # optimizer + citeration
     optimizer   = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)

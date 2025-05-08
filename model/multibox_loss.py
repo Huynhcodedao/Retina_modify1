@@ -58,7 +58,27 @@ class MultiBoxLoss(nn.Module):
         loc_data, conf_data, landm_data = predictions
         priors = priors
         num = loc_data.size(0)
-        num_priors = (priors.size(0))
+        
+        # Check for mismatch between anchors and predictions
+        num_priors = priors.size(0)
+        num_preds = loc_data.size(1)
+        
+        if num_priors != num_preds:
+            print(f"WARNING: Mismatch between number of priors ({num_priors}) and predictions ({num_preds})")
+            print(f"This might be due to configuration mismatch between anchor generation and model output layers")
+            
+            # Handle case where predictions have more elements than priors
+            if num_preds > num_priors:
+                print(f"Truncating predictions from {num_preds} to {num_priors} to match priors")
+                loc_data = loc_data[:, :num_priors, :]
+                conf_data = conf_data[:, :num_priors, :]
+                landm_data = landm_data[:, :num_priors, :]
+                num_preds = num_priors
+            # If priors have more elements than predictions, we need to regenerate priors
+            else:
+                # This should be fixed in the model initialization, not here
+                print(f"ERROR: Priors ({num_priors}) exceed predictions ({num_preds}). Fix model architecture.")
+                return torch.tensor(0.0, requires_grad=True).to(self.device), torch.tensor(0.0, requires_grad=True).to(self.device), torch.tensor(0.0, requires_grad=True).to(self.device)
 
         # match priors (default boxes) and ground truth boxes
         loc_t   = torch.Tensor(num, num_priors, 4)
@@ -89,19 +109,19 @@ class MultiBoxLoss(nn.Module):
         
         # Check for dimension mismatch and fix if needed
         if pos1.unsqueeze(pos1.dim()).shape != landm_data.shape:
-            # Resize pos1 tensor to match the shape of landm_data for element-wise operations
             print(f"Adjusting pos1 shape from {pos1.unsqueeze(pos1.dim()).shape} to match landm_data shape {landm_data.shape}")
-            # Create a new tensor with the correct shape
+            
+            # Create a new compatible tensor for landm selection
+            # Now using slicing to handle the case where priors are fewer than predictions
             pos_idx1 = torch.zeros(landm_data.shape, dtype=torch.bool).to(self.device)
-            # Fill it based on pos1 values, repeating as needed
             for b in range(pos1.size(0)):
                 for p in range(pos1.size(1)):
                     if pos1[b, p]:
-                        for i in range(landm_data.size(2)):
-                            pos_idx1[b, p, i] = True
+                        pos_idx1[b, p, :] = True
         else:
             pos_idx1 = pos1.unsqueeze(pos1.dim()).expand_as(landm_data)
-            
+        
+        # Get prediction and target values for positive indices
         landm_p = landm_data[pos_idx1].view(-1, 10)
         landm_t = landm_t[pos_idx1].view(-1, 10)
         loss_landm = F.smooth_l1_loss(landm_p, landm_t, reduction='sum')

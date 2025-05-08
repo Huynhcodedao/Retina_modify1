@@ -171,8 +171,10 @@ class RetinaFace(nn.Module):
             # ResNet50 output channels: layer2=512, layer3=1024, layer4=2048
             in_channels_list = [512, 512, 1024, 2048]
             
-            # IMPORTANT: Update feature_map for latent mode to ensure anchor generation matches output dimensions
-            self.feature_map = [3, 4, 5, 6, 7]  # Use the same pyramid levels for anchor generation
+            # CRITICAL FIX: Set the feature_map to precisely match the FPN output levels
+            # When using 6 FPN outputs, must define 6 pyramid levels for anchors
+            # This is essential for making sure anchors count matches output dimensions
+            self.feature_map = [2, 3, 4, 5, 6, 7]  # 6 levels to match 6 FPN outputs
         else:
             # Original implementation for RGB image input
             self.body = IntermediateLayerGetter(backbone, return_feature)
@@ -191,7 +193,7 @@ class RetinaFace(nn.Module):
             # For latent mode, we'll have 6 FPN outputs
             fpn_num = 6
         else:
-            fpn_num = len(self.feature_map)
+            fpn_num = 5  # Original uses 5 levels
             
         self.ClassHead      = self._make_class_head(inchannels=OUT_CHANNELS, anchor_num=6, fpn_num=fpn_num)
         self.BboxHead       = self._make_bbox_head(inchannels=OUT_CHANNELS, anchor_num=6, fpn_num=fpn_num)

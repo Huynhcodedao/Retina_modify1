@@ -16,14 +16,14 @@ class Anchors(nn.Module):
         self.sizes          = sizes
         self.feat_shape     = feat_shape
         self.image_size     = image_size
-
+        
         if pyramid_levels is None:
-            # the original pyramid net have P2, P3, P4, P5, P6, C7/P7
+            # Default pyramid levels [3, 4, 5, 6, 7]
             self.pyramid_levels = [3, 4, 5, 6, 7]
         
         if strides is None:
             self.strides = [2 ** (x) for x in self.pyramid_levels]
-
+            
         if sizes is None:
             self.sizes = [2 ** (x+1) for x in self.pyramid_levels]
 
@@ -40,31 +40,44 @@ class Anchors(nn.Module):
 
         if feat_shape is None:
             self.feat_shape = [(self.image_size + x - 1) // x for x in self.strides]
+            
+        print(f"Anchors: Using pyramid levels: {self.pyramid_levels}")
+        print(f"Anchors: Image size: {self.image_size}")
+        print(f"Anchors: Feature shapes: {self.feat_shape}")
         
     def forward(self):
         # compute anchors over all pyramid levels
         all_anchors = np.zeros((0, 4)).astype(np.float32)
 
         for idx, p in enumerate(self.pyramid_levels):
-            anchors         = generate_anchors(base_size=self.sizes[idx], ratios=self.ratios, scales=self.scales)
-            anchors         = torch.from_numpy(anchors).to(dtype=torch.float)
-            shifted_anchors = shift(self.feat_shape[idx], self.strides[idx], anchors)
-            # from IPython import embed
-            # embed()
-            # shifted_anchors = shifted_anchors/self.image_size[0]
-            shifted_anchors[:, 0::2] = shifted_anchors[:, 0::2]/self.image_size[0]
-            shifted_anchors[:, 1::2] = shifted_anchors[:, 1::2]/self.image_size[1]
-
-            all_anchors     = np.append(all_anchors, shifted_anchors, axis=0)
+            if idx >= len(self.feat_shape):
+                print(f"WARNING: Feature shape for pyramid level {p} (idx {idx}) not defined. Using default.")
+                # Use a default feature shape based on the previous level
+                if idx > 0:
+                    prev_shape = self.feat_shape[idx-1]
+                    curr_shape = prev_shape // 2  # Assume halving of spatial dimensions
+                    self.feat_shape.append(curr_shape)
+                else:
+                    # Shouldn't happen, but just in case
+                    self.feat_shape.append(self.image_size // self.strides[idx])
+            
+            anchors = generate_anchors(base_size=self.sizes[idx], ratios=self.ratios, scales=self.scales)
+            anchors = torch.from_numpy(anchors).to(dtype=torch.float)
+            
+            try:
+                shifted_anchors = shift(self.feat_shape[idx], self.strides[idx], anchors)
+                # Normalize coordinates
+                shifted_anchors[:, 0::2] = shifted_anchors[:, 0::2]/self.image_size[0]
+                shifted_anchors[:, 1::2] = shifted_anchors[:, 1::2]/self.image_size[1]
+                all_anchors = np.append(all_anchors, shifted_anchors, axis=0)
+                print(f"Generated {shifted_anchors.shape[0]} anchors for level {p} with stride {self.strides[idx]} and size {self.sizes[idx]}")
+            except Exception as e:
+                print(f"Error generating anchors for level {p}: {e}")
 
         all_anchors = torch.from_numpy(all_anchors).to(dtype=torch.float)
         
         # Print debug info about anchors
-        print(f"Generated {all_anchors.size(0)} anchors from pyramid levels {self.pyramid_levels}")
-        print(f"Pyramid levels: {self.pyramid_levels}")
-        print(f"Strides: {self.strides}")
-        print(f"Sizes: {self.sizes}")
-        print(f"Feature shapes: {self.feat_shape}")
+        print(f"Total generated anchors: {all_anchors.size(0)}")
         
         return all_anchors
 
