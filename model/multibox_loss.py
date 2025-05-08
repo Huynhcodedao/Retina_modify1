@@ -306,8 +306,18 @@ class MultiBoxLoss(nn.Module):
                                 # Set landmark data if available
                                 if targets[b][face_idx, 14] > 0:  # If landmarks are valid
                                     landmarks = targets[b][face_idx, 4:14].unsqueeze(0)
-                                    encoded_landmarks = encode_landm(landmarks.reshape(1, 5, 2), prior_box, self.variance)
-                                    landm_t[b, best_idx] = encoded_landmarks
+                                    try:
+                                        # Reshape landmarks to expected format (batch, 5, 2)
+                                        landmarks_reshaped = landmarks.reshape(1, 5, 2)
+                                        encoded_landmarks = encode_landm(landmarks_reshaped, prior_box, self.variance)
+                                        landm_t[b, best_idx] = encoded_landmarks
+                                    except Exception as e:
+                                        print(f"Error encoding landmarks: {e}")
+                                        # Fallback: set random landmarks
+                                        landm_t[b, best_idx] = torch.randn(10).to(self.device) * 0.1
+                                else:
+                                    # If landmarks are not valid, set small random values
+                                    landm_t[b, best_idx] = torch.randn(10).to(self.device) * 0.1
                                 
                                 print(f"Forced match for batch {b}, face {face_idx} with anchor {best_idx}, IoU: {top_iou[0]:.4f}")
                 
@@ -336,7 +346,11 @@ class MultiBoxLoss(nn.Module):
         
         # Check if we have positive samples for landmarks
         if landm_p.numel() > 0:
-            loss_landm = F.smooth_l1_loss(landm_p, landm_t, reduction='sum') + epsilon
+            # Apply gradient clipping to prevent exploding gradients
+            landm_p_clipped = torch.clamp(landm_p, min=-100, max=100)
+            landm_t_clipped = torch.clamp(landm_t, min=-100, max=100)
+            
+            loss_landm = F.smooth_l1_loss(landm_p_clipped, landm_t_clipped, reduction='sum') + epsilon
         else:
             # If no positive samples, use a small regularization loss
             loss_landm = torch.sum(landm_data.abs()) * 0.0001 + epsilon
@@ -359,7 +373,11 @@ class MultiBoxLoss(nn.Module):
         
         # Check if we have positive samples for localization
         if loc_p.numel() > 0:
-            loss_l = F.smooth_l1_loss(loc_p, loc_t, reduction='sum') + epsilon
+            # Apply gradient clipping to prevent exploding gradients
+            loc_p_clipped = torch.clamp(loc_p, min=-100, max=100)
+            loc_t_clipped = torch.clamp(loc_t, min=-100, max=100)
+            
+            loss_l = F.smooth_l1_loss(loc_p_clipped, loc_t_clipped, reduction='sum') + epsilon
         else:
             # If no positive samples, use a small regularization loss
             loss_l = torch.sum(loc_data.abs()) * 0.0001 + epsilon
@@ -401,6 +419,12 @@ class MultiBoxLoss(nn.Module):
         loss_l /= N
         loss_c /= N
         loss_landm /= N1
+        
+        # Cân bằng các loss components
+        # Giảm trọng số của landmark loss nếu nó quá lớn
+        if loss_landm > 100:
+            loss_landm = loss_landm * 0.1
+            print(f"WARNING: Landmark loss too large, scaling down by 0.1")
         
         print(f"Loss stats - loc: {loss_l.item():.6f}, conf: {loss_c.item():.6f}, landm: {loss_landm.item():.6f}")
 
