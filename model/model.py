@@ -44,6 +44,12 @@ class BridgeModule(nn.Module):
         if self.debug:
             print(f"Bridge input shape: {x.shape}")
         
+        # Handle 5D tensors [B, 1, C, H, W]
+        if x.dim() == 5:
+            x = x.squeeze(1)
+            if self.debug:
+                print(f"Squeezed 5D tensor to 4D: {x.shape}")
+        
         # Handle different input dimensions
         if x.dim() == 3:  # If missing batch dimension
             x = x.unsqueeze(0)
@@ -294,27 +300,47 @@ class RetinaFace(nn.Module):
         Args:
             input (Tensor): For regular input - RGB image(s) [B, 3, H, W]
                             For latent input - latent representation [B, 256, 40, 40]
+                            or [B, 1, 256, 40, 40]
         """
         if self.debug:
             print(f"Input shape: {input.shape}")
             
         if self.use_latent:
-            # Handle input shape issues
-            if len(input.shape) == 3:  # Missing batch dimension
+            # Handle different input dimensions
+            
+            # Case 1: [B, 1, 256, 40, 40] - 5D tensor with extra dimension
+            if len(input.shape) == 5:
+                input = input.squeeze(1)
+                if self.debug:
+                    print(f"Squeezed 5D tensor to 4D: {input.shape}")
+            
+            # Case 2: [256, 40, 40] - Missing batch dimension
+            elif len(input.shape) == 3:
                 input = input.unsqueeze(0)
-                print(f"Added missing batch dimension: {input.shape}")
-                
-            # Ensure we have 256 channels
+                if self.debug:
+                    print(f"Added missing batch dimension: {input.shape}")
+            
+            # Case 3: [B, 1, 40, 40] - Wrong channel count
             if input.size(1) != 256:
-                print(f"WARNING: Expected 256 input channels but got {input.size(1)}")
-                if input.size(1) < 256:
+                if self.debug:
+                    print(f"WARNING: Expected 256 input channels but got {input.size(1)}")
+                
+                if input.size(1) == 1:
+                    # Special case: If we have a single channel, expand it to 256
+                    if self.debug:
+                        print(f"Expanding single channel to 256 channels")
+                    input = input.repeat(1, 256, 1, 1)
+                elif input.size(1) < 256:
                     # If we have fewer channels than needed, duplicate them
-                    multiplier = (256 + input.size(1) - 1) // input.size(1)
+                    multiplier = int(np.ceil(256 / input.size(1)))
                     expanded_input = input.repeat(1, multiplier, 1, 1)
                     input = expanded_input[:, :256]
                 else:
                     # If we have more channels than needed, truncate
                     input = input[:, :256]
+                
+                if self.debug:
+                    print(f"Adjusted input shape: {input.shape}")
                 
             # For latent input, first pass through bridge module to match expected size
             x = self.bridge(input)
@@ -411,6 +437,18 @@ def forward(model, input, targets, anchors, loss_function, optimizer):
     cause the "CUDA out of memory". I've passed all require grad into
     a function to free it while there is nothing refer to it.
     """
+    # Handle 5D input tensors [B, 1, 256, 40, 40]
+    if len(input.shape) == 5 and input.shape[1] == 1:
+        print(f"Detected 5D input tensor with shape {input.shape}, squeezing dimension 1")
+        input = input.squeeze(1)
+        print(f"New input shape: {input.shape}")
+    
+    # Handle case where input has a single channel that needs to be expanded
+    if len(input.shape) == 4 and input.shape[1] == 1 and model.use_latent:
+        print(f"Detected single channel input, expanding to 256 channels")
+        input = input.repeat(1, 256, 1, 1)
+        print(f"New input shape: {input.shape}")
+    
     predict = model(input)
     loss_l, loss_c, loss_landm = loss_function(predict, anchors, targets)
     loss = 1.3*loss_l + loss_c + loss_landm

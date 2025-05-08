@@ -243,13 +243,38 @@ class LatentWiderFaceDataset(Dataset):
             # Convert latent data to tensor and ensure it's the right shape
             latent_tensor = torch.from_numpy(latent_data).float()
             
-            # Ensure the tensor has the correct dimensions
-            if len(latent_tensor.shape) == 3:  # Missing batch dimension
-                latent_tensor = latent_tensor.unsqueeze(0)
+            # Debug the shape of the loaded tensor
+            if index == 0:
+                print(f"DEBUG: Original latent tensor shape from file: {latent_tensor.shape}")
             
-            if latent_tensor.shape[0] != 1:
-                # If it has multiple batches, use only the first one
-                latent_tensor = latent_tensor[0:1]
+            # Ensure the tensor has the correct dimensions - we want [C, H, W] for stacking in collate
+            if len(latent_tensor.shape) == 4 and latent_tensor.shape[0] == 1:  # [1, C, H, W]
+                # If it has a batch dimension of 1, remove it
+                latent_tensor = latent_tensor.squeeze(0)
+                if index == 0:
+                    print(f"DEBUG: Squeezed batch dimension, new shape: {latent_tensor.shape}")
+            elif len(latent_tensor.shape) == 2:  # [H, W]
+                # If it's just a 2D tensor, add channel dimension
+                latent_tensor = latent_tensor.unsqueeze(0)
+                if index == 0:
+                    print(f"DEBUG: Added channel dimension, new shape: {latent_tensor.shape}")
+            
+            # Ensure we have 256 channels
+            if latent_tensor.shape[0] != 256 and len(latent_tensor.shape) == 3:
+                if index == 0:
+                    print(f"DEBUG: Adjusting channel count from {latent_tensor.shape[0]} to 256")
+                
+                if latent_tensor.shape[0] < 256:
+                    # If we have fewer channels than needed, duplicate them
+                    repeat_factor = int(np.ceil(256 / latent_tensor.shape[0]))
+                    expanded = torch.repeat_interleave(latent_tensor, repeat_factor, dim=0)
+                    latent_tensor = expanded[:256]
+                else:
+                    # If we have more channels than needed, truncate
+                    latent_tensor = latent_tensor[:256]
+                
+                if index == 0:
+                    print(f"DEBUG: Final channel count: {latent_tensor.shape[0]}")
                 
             # Process annotations
             face_annotations = self.annotations[index]
@@ -321,12 +346,16 @@ class LatentWiderFaceDataset(Dataset):
             # Convert annotations to tensor
             target_tensor = torch.from_numpy(target_array).float()
             
+            if index == 0:
+                print(f"DEBUG: Final latent tensor shape: {latent_tensor.shape}")
+                print(f"DEBUG: Target tensor shape: {target_tensor.shape}")
+            
             return latent_tensor, target_tensor
             
         except Exception as e:
             print(f"Error processing item {index} ({self.ids[index]}): {e}")
             # Return empty tensors as a fallback
-            empty_latent = torch.zeros((1, 256, 40, 40)).float()
+            empty_latent = torch.zeros((256, 40, 40)).float()  # Changed to [C, H, W] format
             empty_target = torch.zeros((0, 15)).float()
             return empty_latent, empty_target
 
@@ -367,7 +396,17 @@ def detection_collate(batch):
         if not isinstance(target, torch.Tensor):
             target = torch.from_numpy(target).to(dtype=torch.float)
 
+        # Ensure images have the correct shape before stacking
+        # For latent features: [1, 256, 40, 40] - Remove the batch dimension so we can stack properly
+        if image.dim() == 4 and image.size(0) == 1:
+            if image.size(1) == 256:  # This is a latent tensor with shape [1, 256, 40, 40]
+                image = image.squeeze(0)  # Convert to [256, 40, 40]
+            else:
+                # Don't squeeze if it's already the correct shape (like RGB images)
+                pass
+
         imgs.append(image)
         targets.append(target)
-
+    
+    # Note: Stack adds a batch dimension, so result is [batch_size, channels, height, width]
     return (torch.stack(imgs, dim=0), targets)
